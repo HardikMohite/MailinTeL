@@ -19,6 +19,7 @@ import {
   Activity,
   Layers,
   Sparkles,
+  UserCheck,
 } from 'lucide-react';
 import {
   getIPGeolocation,
@@ -259,6 +260,10 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
           email_id: `lookup-${clean}`,
           total_hops: 1,
           total_markers: 1,
+          tor_node_count: data.is_tor ? 1 : 0,
+          vpn_node_count: data.is_vpn ? 1 : 0,
+          cloud_node_count: data.is_cloud ? 1 : 0,
+          personal_mail_node_count: data.is_personal_mail ? 1 : 0,
           hops: [],
           markers: [marker],
           paths: [],
@@ -351,15 +356,17 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         [p.to_coords[0], p.to_coords[1]],
       ];
 
+      const isInferred = p.is_inferred || (p.label && p.label.toLowerCase().includes('deduced'));
+
       const polyline = L.polyline(latlngs, {
-        color: '#0284C7', // sky-blue transmission dash
-        weight: 3,
-        opacity: 0.85,
-        dashArray: '8, 8',
+        color: isInferred ? '#10B981' : '#0284C7', // Emerald dash for deduced human-to-cloud arc, sky-blue for relay
+        weight: isInferred ? 3.5 : 3,
+        opacity: 0.9,
+        dashArray: isInferred ? '6, 6' : '8, 8',
       });
 
       polyline.bindTooltip(
-        `<div class="text-xs font-semibold font-mono p-1 text-slate-100">Route Segment: ${p.label || `${p.from_ip} → ${p.to_ip}`}</div>`,
+        `<div class="text-xs font-semibold font-mono p-1 text-slate-100">${isInferred ? '⚡ Passive Forensic Arc: ' : 'Route Segment: '}${p.label || `${p.from_ip} → ${p.to_ip}`}</div>`,
         { sticky: true }
       );
 
@@ -372,6 +379,7 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
       const latlng = L.latLng(m.latitude, m.longitude);
       boundsLatLngs.push(latlng);
 
+      const isDeducedOrigin = m.role === 'DEDUCED_HUMAN_ORIGIN' || m.id === 'marker-deduced-human-origin';
       const type = (m.connection_type || '').toUpperCase();
       const isTor = m.is_tor || type === 'TOR';
       const isVpn = m.is_vpn || type === 'VPN';
@@ -383,7 +391,12 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
       let iconSymbol = '⚡';
       let categoryBadge = '🔵 Transit Relay';
 
-      if (isTor) {
+      if (isDeducedOrigin) {
+        markerColor = '#10B981'; // Emerald
+        badgeLabel = 'HUMAN';
+        iconSymbol = '👤';
+        categoryBadge = '🟢 Physical Human Origin (Deduced)';
+      } else if (isTor) {
         markerColor = '#A855F7'; // Purple
         badgeLabel = 'TOR';
         iconSymbol = '🧅';
@@ -405,26 +418,29 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         categoryBadge = '🔵 Cloud Datacenter';
       }
 
-      const isOrigin = m.role === 'ORIGIN_HOP' || (m.sequence_number === 1);
+      const isOrigin = isDeducedOrigin || m.role === 'ORIGIN_HOP' || (m.sequence_number === 1);
       const isDestination = m.role === 'DESTINATION_NODE';
 
       // Custom pulsing HTML marker with distinct category badge & icon
       const customIcon = L.divIcon({
         className: 'custom-geo-marker',
         html: `
-          <div style="position: relative; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
-            ${isOrigin ? `<div style="position: absolute; width: 36px; height: 36px; border-radius: 9999px; border: 2px dashed #EF4444; animation: spin-slow 8s linear infinite;"></div>` : ''}
+          <div style="position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+            ${isDeducedOrigin ? `
+              <div style="position: absolute; width: 44px; height: 44px; border-radius: 9999px; border: 2px solid #10B981; animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;"></div>
+              <div style="position: absolute; width: 38px; height: 38px; border-radius: 9999px; border: 2px dashed #34D399; animation: spin-slow 10s linear infinite;"></div>
+            ` : isOrigin ? `<div style="position: absolute; width: 36px; height: 36px; border-radius: 9999px; border: 2px dashed #EF4444; animation: spin-slow 8s linear infinite;"></div>` : ''}
             <div style="position: absolute; width: 30px; height: 30px; border-radius: 9999px; background-color: ${markerColor}; opacity: 0.35; animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;"></div>
-            <div style="position: relative; width: 22px; height: 22px; border-radius: 9999px; background-color: ${markerColor}; border: 2px solid #FFFFFF; box-shadow: 0 0 10px ${markerColor}; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 10px; font-weight: 800; font-family: monospace;">
-              ${m.sequence_number != null ? m.sequence_number : idx + 1}
+            <div style="position: relative; width: 24px; height: 24px; border-radius: 9999px; background-color: ${markerColor}; border: 2px solid #FFFFFF; box-shadow: 0 0 12px ${markerColor}; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: ${isDeducedOrigin ? '12px' : '10px'}; font-weight: 800; font-family: monospace;">
+              ${isDeducedOrigin ? '👤' : (m.sequence_number != null ? m.sequence_number : idx + 1)}
             </div>
-            <div style="position: absolute; bottom: -8px; background: #0F172A; border: 1px solid ${markerColor}; border-radius: 4px; padding: 1px 3px; font-size: 8px; font-weight: 800; color: ${markerColor}; text-transform: uppercase; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.6);">
+            <div style="position: absolute; bottom: -8px; background: #0F172A; border: 1px solid ${markerColor}; border-radius: 4px; padding: 1px 4px; font-size: 8px; font-weight: 800; color: ${markerColor}; text-transform: uppercase; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.6);">
               ${badgeLabel}
             </div>
           </div>
         `,
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
       });
 
       const isCloudProvider = isCloud || Boolean(
@@ -434,23 +450,29 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
 
       // Interactive Tactical Popup
       const popupContent = `
-        <div style="min-width: 230px; padding: 6px; font-family: inherit; color: #F8FAFC;">
+        <div style="min-width: 250px; padding: 6px; font-family: inherit; color: #F8FAFC;">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px;">
             <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; background: ${markerColor}22; color: ${markerColor}; border: 1px solid ${markerColor}66; border-radius: 4px; padding: 2px 6px;">
               ${iconSymbol} ${categoryBadge}
             </span>
-            ${isOrigin ? (isCloudProvider ? `<span style="font-size: 9px; font-weight: 800; background: #F59E0B33; color: #FBBF24; border: 1px solid #F59E0B66; border-radius: 4px; padding: 1px 4px;">CLOUD RELAY</span>` : `<span style="font-size: 9px; font-weight: 800; background: #10B98133; color: #34D399; border: 1px solid #10B98166; border-radius: 4px; padding: 1px 4px;">CLIENT ORIGIN</span>`) : isDestination ? `<span style="font-size: 9px; font-weight: 800; background: #38BDF833; color: #38BDF8; border: 1px solid #38BDF866; border-radius: 4px; padding: 1px 4px;">GATEWAY</span>` : ''}
+            ${isDeducedOrigin ? `<span style="font-size: 9px; font-weight: 800; background: #10B98133; color: #34D399; border: 1px solid #10B98166; border-radius: 4px; padding: 1px 4px;">DEDUCED SENDER</span>` : isOrigin ? (isCloudProvider ? `<span style="font-size: 9px; font-weight: 800; background: #F59E0B33; color: #FBBF24; border: 1px solid #F59E0B66; border-radius: 4px; padding: 1px 4px;">CLOUD RELAY</span>` : `<span style="font-size: 9px; font-weight: 800; background: #10B98133; color: #34D399; border: 1px solid #10B98166; border-radius: 4px; padding: 1px 4px;">CLIENT ORIGIN</span>`) : isDestination ? `<span style="font-size: 9px; font-weight: 800; background: #38BDF833; color: #38BDF8; border: 1px solid #38BDF866; border-radius: 4px; padding: 1px 4px;">GATEWAY</span>` : ''}
           </div>
+          ${isDeducedOrigin && m.forensic_explanation ? `
+            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 11px; color: #A7F3D0; line-height: 1.4;">
+              <strong style="color: #34D399; display: block; margin-bottom: 2px;">⚡ Passive .EML Forensic Evidence:</strong>
+              ${m.forensic_explanation}
+            </div>
+          ` : ''}
           <div style="font-weight: 700; font-size: 13px; color: #F8FAFC; margin-bottom: 4px;">
-            ${m.city_name ? `${m.city_name}, ` : ''}${m.country_name || 'Unknown Location'}
+            ${m.city_name ? `${m.city_name}, ` : ''}${m.region_name ? `${m.region_name}, ` : ''}${m.country_name || 'Unknown Location'}
           </div>
           <div style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 8px; padding: 8px; font-size: 11px; space-y: 4px; margin-bottom: 6px;">
-            <div>IP: <strong style="color: #38BDF8; font-family: monospace;">${m.ip_address}</strong></div>
+            <div>IP / Node: <strong style="color: #38BDF8; font-family: monospace;">${m.ip_address}</strong></div>
             ${m.provider ? `<div>Provider: <strong style="color: #F1F5F9;">${m.provider}</strong></div>` : ''}
             ${m.asn ? `<div>ASN: <span style="color: #94A3B8; font-family: monospace;">${m.asn}</span></div>` : ''}
             ${m.host ? `<div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Host: <span style="color: #CBD5E1;">${m.host}</span></div>` : ''}
             <div>Coordinates: <span style="color: #94A3B8; font-family: monospace;">${m.latitude.toFixed(4)}, ${m.longitude.toFixed(4)}</span></div>
-            ${m.confidence != null ? `<div>Accuracy: <strong style="color: #34D399;">${Math.round(m.confidence * 100)}%</strong></div>` : ''}
+            ${m.confidence != null ? `<div>Accuracy / Confidence: <strong style="color: #34D399;">${Math.round(m.confidence * 100)}%</strong></div>` : ''}
           </div>
           <div style="font-size: 10px; color: #94A3B8; text-align: center;">Click to inspect detailed hop telemetry</div>
         </div>
@@ -505,6 +527,17 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
 
   // Helper to determine node theme colors & description
   const getNodeClassificationInfo = (m: GeoMarkerItem) => {
+    if (m.role === 'DEDUCED_HUMAN_ORIGIN' || m.id === 'marker-deduced-human-origin') {
+      return {
+        label: 'Deduced Human Actor Origin (Passive .EML Triangulation)',
+        badge: 'HUMAN SENDER',
+        color: 'text-emerald-400',
+        bg: 'bg-emerald-500/20 border-emerald-500/40',
+        cardBorder: 'border-emerald-500/50',
+        icon: UserCheck,
+        description: 'Physical sender location triangulated purely from passive evidence within the .eml file (Timezone offset, regional postal PIN codes, telephone prefixes, and client-ip auth traces) without social engineering or tracking pixels.',
+      };
+    }
     const type = (m.connection_type || '').toUpperCase();
     if (m.is_tor || type === 'TOR') {
       return {
@@ -823,6 +856,64 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         </div>
       </div>
 
+      {/* Forensic Passive Origin Triangulation Alert Banner */}
+      {viewMode === 'email' && emailGeo?.deduced_human_origin?.deduced_city && (
+        <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-950/70 via-slate-900 to-slate-900 border border-emerald-500/40 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 shrink-0 mt-0.5">
+              <UserCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                  Forensic Human Sender Triangulation (Passive .EML Evidence)
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                  {Math.round((emailGeo.deduced_human_origin.confidence_score || 0.85) * 100)}% Confidence
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-medium">
+                  Zero Social Engineering / Canary Free
+                </span>
+              </div>
+              <div className="text-sm font-semibold text-white mt-1">
+                Triangulated Human Physical Location:{' '}
+                <span className="text-emerald-300 font-bold">
+                  {emailGeo.deduced_human_origin.deduced_city}
+                  {emailGeo.deduced_human_origin.deduced_region ? `, ${emailGeo.deduced_human_origin.deduced_region}` : ''}
+                  {emailGeo.deduced_human_origin.deduced_country ? `, ${emailGeo.deduced_human_origin.deduced_country}` : ''}
+                </span>
+                {emailGeo.deduced_human_origin.is_redacted_by_provider && (
+                  <span className="text-xs font-normal text-slate-400 ml-2">
+                    (Cloud Provider {emailGeo.deduced_human_origin.provider_name || 'Datacenter'} Redacted Raw IP; Derived from Multi-Artifact Correlation)
+                  </span>
+                )}
+              </div>
+              {emailGeo.deduced_human_origin.forensic_explanation && (
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  {emailGeo.deduced_human_origin.forensic_explanation}
+                </p>
+              )}
+            </div>
+          </div>
+          {emailGeo.deduced_human_origin.latitude && emailGeo.deduced_human_origin.longitude && (
+            <button
+              onClick={() => {
+                if (mapInstanceRef.current && emailGeo.deduced_human_origin?.latitude && emailGeo.deduced_human_origin?.longitude) {
+                  mapInstanceRef.current.setView(
+                    [emailGeo.deduced_human_origin.latitude, emailGeo.deduced_human_origin.longitude],
+                    10
+                  );
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shrink-0 transition-colors flex items-center gap-1.5 shadow-md self-start md:self-center"
+            >
+              <Navigation className="w-3.5 h-3.5" />
+              Focus Human Origin
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Main Interactive Map Canvas & Telemetry Panel */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Map Viewport Container */}
@@ -832,6 +923,11 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
 
           {/* Tactical Floating Color Legend */}
           <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-3 bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-lg border border-slate-700/60 shadow-xl text-[11px]">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 border border-white shadow-sm shadow-emerald-400/50"></span>
+              <span className="text-emerald-300 font-bold">👤 Human Origin (Deduced)</span>
+            </div>
+            <span className="text-slate-600">·</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shadow-sm shadow-purple-500/50"></span>
               <span className="text-purple-300 font-semibold">Tor Node</span>
@@ -974,8 +1070,9 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
 
                       {/* Header Info */}
                       {(() => {
-                        const isOrigin = selectedMarker.role === 'ORIGIN_HOP' || selectedMarker.sequence_number === 1;
-                        const isCloudRelay = Boolean(
+                        const isDeduced = selectedMarker.role === 'DEDUCED_HUMAN_ORIGIN' || selectedMarker.id === 'marker-deduced-human-origin';
+                        const isOrigin = isDeduced || selectedMarker.role === 'ORIGIN_HOP' || selectedMarker.sequence_number === 1;
+                        const isCloudRelay = !isDeduced && Boolean(
                           selectedMarker.is_cloud || selectedMarker.is_datacenter ||
                           (selectedMarker.provider && (selectedMarker.provider.toLowerCase().includes('microsoft') || selectedMarker.provider.toLowerCase().includes('google') || selectedMarker.provider.toLowerCase().includes('amazon'))) ||
                           (selectedMarker.asn_org && (selectedMarker.asn_org.toLowerCase().includes('microsoft') || selectedMarker.asn_org.toLowerCase().includes('google') || selectedMarker.asn_org.toLowerCase().includes('amazon')))
@@ -984,17 +1081,23 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
                         return (
                           <>
                             <div className="flex items-center justify-between gap-1">
-                              <span className="font-bold text-text-primary text-sm font-mono">{selectedMarker.ip_address}</span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                isOrigin
+                              <span className={`font-bold text-sm font-mono truncate ${isDeduced ? 'text-emerald-400' : 'text-text-primary'}`}>
+                                {selectedMarker.ip_address}
+                              </span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                                isDeduced
+                                  ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
+                                  : isOrigin
                                   ? isCloudRelay
                                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                   : 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
                               }`}>
-                                {isOrigin
+                                {isDeduced
+                                  ? '🎯 Deduced Human Sender'
+                                  : isOrigin
                                   ? isCloudRelay
-                                    ? 'First Relay (Cloud Server)'
+                                    ? 'First Cloud Relay (MTA)'
                                     : 'Sender Client Device'
                                   : `Hop #${selectedMarker.sequence_number || '1'}`}
                               </span>
@@ -1003,12 +1106,15 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
                             {/* Location & Provider */}
                             <div className="text-xs text-text-secondary space-y-0.5">
                               <div>
-                                <strong className="text-text-primary">{selectedMarker.city_name ? `${selectedMarker.city_name}, ` : ''}</strong>
+                                <strong className="text-text-primary">
+                                  {selectedMarker.city_name ? `${selectedMarker.city_name}, ` : ''}
+                                </strong>
+                                {selectedMarker.region_name ? `${selectedMarker.region_name}, ` : ''}
                                 {selectedMarker.country_name || 'Unknown Country'}
                               </div>
                               {selectedMarker.provider && (
                                 <div className="text-[11px] text-text-secondary font-medium">
-                                  Provider: <span className="text-text-primary">{selectedMarker.provider}</span>
+                                  Provider / Network: <span className="text-text-primary">{selectedMarker.provider}</span>
                                 </div>
                               )}
                               {selectedMarker.asn && (
@@ -1023,10 +1129,44 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
                               )}
                             </div>
 
+                            {/* Deduced Forensic Evidence Signals Breakdown */}
+                            {selectedMarker.forensic_explanation && (
+                              <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-[11px] text-emerald-200/90 leading-relaxed space-y-1.5">
+                                <div className="flex items-center gap-1.5 font-bold text-emerald-300">
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                  <span>Passive .EML Forensic Triangulation:</span>
+                                </div>
+                                <div className="text-slate-300 text-[11px]">
+                                  {selectedMarker.forensic_explanation}
+                                </div>
+                              </div>
+                            )}
+
+                            {selectedMarker.evidence_signals && selectedMarker.evidence_signals.length > 0 && (
+                              <div className="space-y-1.5 pt-1.5 border-t border-workspace-border">
+                                <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center justify-between">
+                                  <span>Forensic Evidence Signals</span>
+                                  <span className="text-[9px] text-slate-400 font-normal">Passive .eml parsing</span>
+                                </div>
+                                <div className="space-y-1">
+                                  {selectedMarker.evidence_signals.map((sig, sIdx) => (
+                                    <div key={sIdx} className="p-1.5 rounded bg-slate-900/80 border border-emerald-500/20 text-[10px]">
+                                      <div className="flex items-center justify-between text-emerald-300 font-semibold">
+                                        <span>{sig.category.toUpperCase()}: {sig.signal}</span>
+                                        <span className="text-emerald-400/90 font-mono">+{Math.round(sig.confidence_weight * 100)}%</span>
+                                      </div>
+                                      <div className="text-white font-mono text-[11px] mt-0.5">{sig.value}</div>
+                                      <div className="text-text-muted mt-0.5">{sig.detail}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
                             {isOrigin && isCloudRelay && (
                               <div className="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200/90 leading-relaxed">
                                 <strong className="text-amber-300 block mb-0.5">ℹ️ Provider Privacy Shield:</strong>
-                                Webmail providers (Microsoft Outlook, Gmail) redact the user's home IP to protect privacy. This observable hop represents the provider's mail server ({selectedMarker.provider || selectedMarker.asn_org || 'Cloud Datacenter'}), not your friend's personal device location.
+                                Webmail providers (Microsoft Outlook, Google Gmail) redact the user's home IP to protect privacy. This observable hop represents the provider's mail server ({selectedMarker.provider || selectedMarker.asn_org || 'Cloud Datacenter'}), not the personal device. Check the Deduced Human Origin node (#0) on the map for the physical sender location triangulated from internal .eml evidence.
                               </div>
                             )}
                           </>
@@ -1155,8 +1295,12 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
                           {m.provider ? `${m.provider} · ` : ''}{m.city_name ? `${m.city_name}, ` : ''}{m.country_name}
                         </div>
                       </div>
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-workspace-card border border-workspace-border shrink-0 font-mono">
-                        {m.sequence_number ? `#${m.sequence_number}` : `${idx + 1}`}
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 font-mono ${
+                        m.role === 'DEDUCED_HUMAN_ORIGIN'
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : 'bg-workspace-card text-text-muted border-workspace-border'
+                      }`}>
+                        {m.role === 'DEDUCED_HUMAN_ORIGIN' ? '👤 HUMAN' : m.sequence_number ? `#${m.sequence_number}` : `${idx + 1}`}
                       </span>
                     </div>
                   );
@@ -1167,7 +1311,7 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
 
           {/* Attribution Note */}
           <div className="p-2.5 rounded-lg bg-workspace border border-workspace-border text-[10px] text-text-muted leading-relaxed">
-            Geolocation coordinates represent network egress infrastructure (MTA/relays), not direct physical device presence.
+            Observational relay coordinates reflect cloud/MTA routing hops. Personal human origin is forensically triangulated from passive .eml artifacts (Timezone offset, regional postal PIN codes, telephone prefixes, and SPF client traces) with zero social engineering.
           </div>
         </div>
       </div>

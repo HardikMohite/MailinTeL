@@ -1235,6 +1235,14 @@ export interface GeoMarkerItem {
   asn_org?: string | null;
   reverse_dns?: string | null;
   classification_badges?: string[];
+  evidence_signals?: Array<{
+    category: string;
+    signal: string;
+    value: string;
+    confidence_weight: number;
+    detail: string;
+  }>;
+  forensic_explanation?: string;
 }
 
 export interface GeoPathSegment {
@@ -1245,6 +1253,7 @@ export interface GeoPathSegment {
   from_coords: [number, number];
   to_coords: [number, number];
   label: string;
+  is_inferred?: boolean;
 }
 
 export interface HopGeoNode {
@@ -1253,17 +1262,16 @@ export interface HopGeoNode {
   source_ip: string;
   destination_host?: string | null;
   reliability: string;
-  geolocation: GeoIPLookupResponse;
-  connection_type?: 'TOR' | 'VPN' | 'CLOUD' | 'PERSONAL_MAIL' | 'RESIDENTIAL' | 'INTERNAL' | 'RELAY' | string;
+  geolocation: Record<string, any>;
+  connection_type: string;
   provider?: string | null;
-  is_tor?: boolean;
-  is_vpn?: boolean;
-  is_datacenter?: boolean;
-  is_cloud?: boolean;
-  is_personal_mail?: boolean;
+  is_tor: boolean;
+  is_vpn: boolean;
+  is_datacenter: boolean;
+  is_cloud: boolean;
+  is_personal_mail: boolean;
   asn?: string | null;
   asn_org?: string | null;
-  reverse_dns?: string | null;
   classification_badges?: string[];
 }
 
@@ -1272,15 +1280,36 @@ export interface EmailGeoInfrastructureResponse {
   subject?: string | null;
   total_hops: number;
   total_markers: number;
-  tor_node_count?: number;
-  vpn_node_count?: number;
-  cloud_node_count?: number;
-  personal_mail_node_count?: number;
+  tor_node_count: number;
+  vpn_node_count: number;
+  cloud_node_count: number;
+  personal_mail_node_count: number;
   hops: HopGeoNode[];
   markers: GeoMarkerItem[];
   paths: GeoPathSegment[];
   country_distribution: Record<string, number>;
   attribution_disclaimer: string;
+  deduced_human_origin?: {
+    deduced_country?: string | null;
+    deduced_country_code?: string | null;
+    deduced_region?: string | null;
+    deduced_city?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    accuracy_radius_km?: number;
+    confidence_level?: string;
+    confidence_score?: number;
+    is_redacted_by_provider?: boolean;
+    provider_name?: string | null;
+    evidence_signals?: Array<{
+      category: string;
+      signal: string;
+      value: string;
+      confidence_weight: number;
+      detail: string;
+    }>;
+    forensic_explanation?: string;
+  };
 }
 
 export interface CampaignGeoInfrastructureResponse {

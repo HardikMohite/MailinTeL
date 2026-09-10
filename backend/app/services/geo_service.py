@@ -12,8 +12,9 @@ from app.models.intelligence import (
     Domain,
     DomainDNSRecord,
 )
-from app.models.emails import Email, EmailSource, RelayHop
+from app.models.emails import Email, EmailSource, RelayHop, EmailHeader
 from app.models.campaign import Campaign, CampaignMembership
+from app.intelligence.origin_deducer import human_origin_deducer
 from app.intelligence.geo_resolver import (
     AsyncGeoIPResolver,
     GeoIPResult,
@@ -271,6 +272,67 @@ class GeolocationService:
                 "label": f"Hop {src_hop['sequence_number']} → Hop {dst_hop['sequence_number']}",
             })
 
+        # 4. Multi-Artifact Human Origin Location Deduction
+        headers_stmt = select(EmailHeader).where(EmailHeader.email_id == email_id)
+        headers_res = await session.execute(headers_stmt)
+        headers_list = [{"header_name": h.header_name, "header_value": h.header_value} for h in headers_res.scalars().all()]
+
+        deduced_verdict = human_origin_deducer.deduce_origin(
+            raw_headers=headers_list,
+            body_text=None,
+            hops=hop_nodes,
+        )
+
+        if deduced_verdict.deduced_country and deduced_verdict.latitude is not None and deduced_verdict.longitude is not None:
+            first_hop_lat = valid_coords_hops[0]["geolocation"]["latitude"] if valid_coords_hops else None
+            first_hop_lon = valid_coords_hops[0]["geolocation"]["longitude"] if valid_coords_hops else None
+
+            is_distinct_from_mta = True
+            if first_hop_lat is not None and first_hop_lon is not None:
+                is_distinct_from_mta = abs(deduced_verdict.latitude - first_hop_lat) > 0.5 or abs(deduced_verdict.longitude - first_hop_lon) > 0.5
+
+            if is_distinct_from_mta and deduced_verdict.is_redacted_by_provider:
+                origin_marker = {
+                    "id": "marker-deduced-human-origin",
+                    "entity_type": "DEDUCED_HUMAN_ORIGIN",
+                    "sequence_number": 0,
+                    "ip_address": "Redacted (Privacy Shield)",
+                    "host": f"Human Composer ({deduced_verdict.deduced_city})",
+                    "latitude": deduced_verdict.latitude,
+                    "longitude": deduced_verdict.longitude,
+                    "country_code": deduced_verdict.deduced_country_code,
+                    "country_name": deduced_verdict.deduced_country,
+                    "region_name": deduced_verdict.deduced_region,
+                    "city_name": deduced_verdict.deduced_city,
+                    "accuracy_radius_km": deduced_verdict.accuracy_radius_km,
+                    "confidence": deduced_verdict.confidence_score,
+                    "role": "DEDUCED_HUMAN_ORIGIN",
+                    "connection_type": "PERSONAL_MAIL",
+                    "provider": f"Forensic Artifact Triangulation ({deduced_verdict.confidence_level} Confidence)",
+                    "is_tor": False,
+                    "is_vpn": False,
+                    "is_datacenter": False,
+                    "is_cloud": False,
+                    "is_personal_mail": True,
+                    "classification_badges": ["HUMAN_ORIGIN_DEDUCED", f"CONFIDENCE_{deduced_verdict.confidence_level}"],
+                    "evidence_signals": [s.to_dict() for s in deduced_verdict.evidence_signals],
+                    "forensic_explanation": deduced_verdict.forensic_explanation,
+                }
+                markers.insert(0, origin_marker)
+
+                if valid_coords_hops:
+                    first_relay = valid_coords_hops[0]
+                    paths.insert(0, {
+                        "from_hop": 0,
+                        "to_hop": first_relay["sequence_number"],
+                        "from_ip": "Client Device",
+                        "to_ip": first_relay["source_ip"],
+                        "from_coords": [deduced_verdict.latitude, deduced_verdict.longitude],
+                        "to_coords": [first_relay["geolocation"]["latitude"], first_relay["geolocation"]["longitude"]],
+                        "label": f"Human Author ({deduced_verdict.deduced_city}) ⇢ Ingest Relay ({first_relay['source_ip']})",
+                        "is_inferred": True,
+                    })
+
         tor_count = sum(1 for m in markers if m.get("is_tor"))
         vpn_count = sum(1 for m in markers if m.get("is_vpn"))
         cloud_count = sum(1 for m in markers if m.get("is_cloud") or m.get("is_datacenter"))
@@ -290,6 +352,7 @@ class GeolocationService:
             "paths": paths,
             "country_distribution": country_counts,
             "attribution_disclaimer": ATTRIBUTION_DISCLAIMER,
+            "deduced_human_origin": deduced_verdict.to_dict(),
         }
 
     async def geolocate_campaign_infrastructure(
