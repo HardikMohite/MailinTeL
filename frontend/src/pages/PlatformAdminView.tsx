@@ -10,8 +10,6 @@ import {
   Check,
   X,
   MoreVertical,
-  ClipboardList,
-  Filter,
   Mail,
   FileText,
   Download,
@@ -30,13 +28,11 @@ import {
   invitePlatformUser,
   updatePlatformUserRole,
   deactivatePlatformUser,
-  listPlatformAuditLog,
   listEmails,
   getEvidenceDownloadUrl,
   EmailDetailResponse,
   OrganizationItem,
   PlatformMember,
-  AuditLogEntry,
 } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useApiErrorHandler } from '../hooks/useApiErrorHandler';
@@ -52,8 +48,6 @@ const ROLE_LABELS: Record<string, string> = {
 };
 const roleLabel = (code: string) => ROLE_LABELS[code] || code;
 const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : 'Never');
-
-const AUDIT_PAGE_SIZE = 50;
 
 export interface PlatformAdminViewProps {
   onSelectEmail?: (emailId: string) => void;
@@ -73,7 +67,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   const canAccess = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
 
   // Navigation sub-tabs
-  const [activeSection, setActiveSection] = useState<'overview' | 'phishing' | 'organizations' | 'users' | 'audit'>('overview');
+  const [activeSection, setActiveSection] = useState<'overview' | 'phishing' | 'organizations' | 'users'>('overview');
 
   // --- Phishing Email Ingestion & Triage Queue ----------------------
   const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
@@ -107,17 +101,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
 
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-
-  // --- Audit log -------------------------------------------------
-  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
-  const [auditLoading, setAuditLoading] = useState(true);
-  const [auditError, setAuditError] = useState<string | null>(null);
-  const [auditActorId, setAuditActorId] = useState('');
-  const [auditOrgId, setAuditOrgId] = useState('');
-  const [auditAction, setAuditAction] = useState('');
-  const [auditDateFrom, setAuditDateFrom] = useState('');
-  const [auditDateTo, setAuditDateTo] = useState('');
-  const [auditLimit, setAuditLimit] = useState(AUDIT_PAGE_SIZE);
 
   // Data Loaders
   const loadEmails = useCallback(async () => {
@@ -169,35 +152,11 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     [parseApiError]
   );
 
-  const loadAuditLog = useCallback(
-    async (limit: number) => {
-      setAuditLoading(true);
-      setAuditError(null);
-      try {
-        const data = await listPlatformAuditLog({
-          actor_user_id: auditActorId.trim() || undefined,
-          organization_id: auditOrgId || undefined,
-          action: auditAction || undefined,
-          date_from: auditDateFrom ? new Date(auditDateFrom).toISOString() : undefined,
-          date_to: auditDateTo ? new Date(auditDateTo).toISOString() : undefined,
-          limit,
-        });
-        setAuditEntries(data);
-      } catch (err) {
-        setAuditError(parseApiError(err).message);
-      } finally {
-        setAuditLoading(false);
-      }
-    },
-    [auditActorId, auditOrgId, auditAction, auditDateFrom, auditDateTo, parseApiError]
-  );
-
   useEffect(() => {
     if (!canAccess) return;
     loadEmails();
     loadOrganizations();
-    loadAuditLog(AUDIT_PAGE_SIZE);
-  }, [canAccess, loadEmails, loadOrganizations, loadAuditLog]);
+  }, [canAccess, loadEmails, loadOrganizations]);
 
   useEffect(() => {
     if (!canAccess) return;
@@ -337,18 +296,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const handleAuditFilterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuditLimit(AUDIT_PAGE_SIZE);
-    loadAuditLog(AUDIT_PAGE_SIZE);
-  };
-
-  const handleLoadMoreAudit = () => {
-    const next = auditLimit + AUDIT_PAGE_SIZE;
-    setAuditLimit(next);
-    loadAuditLog(next);
-  };
-
   return (
     <div className="space-y-6">
       {/* Top Banner & Command Bar */}
@@ -415,17 +362,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
           >
             <Users className="w-3.5 h-3.5" />
             <span>Users & Access</span>
-          </button>
-          <button
-            onClick={() => setActiveSection('audit')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-              activeSection === 'audit'
-                ? 'bg-workspace-card text-brand font-semibold shadow-xs'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            <ClipboardList className="w-3.5 h-3.5" />
-            <span>Audit log</span>
           </button>
         </div>
       </div>
@@ -958,151 +894,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
                   ))}
                 </tbody>
               </table>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* SECTION 4: AUDIT LOG */}
-      {activeSection === 'audit' && (
-        <section className="space-y-3">
-          <div className="bg-workspace-card border border-workspace-border rounded-xl p-5 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-brand-soft flex items-center justify-center">
-                <ClipboardList className="w-4 h-4 text-brand" />
-              </div>
-              <div>
-                <h3 className="text-[13.5px] font-semibold text-text-primary">Audit log</h3>
-                <p className="text-[12px] text-text-muted mt-0.5">Immutable cross-organization security event trail.</p>
-              </div>
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleAuditFilterSubmit}
-            className="bg-workspace-card border border-workspace-border rounded-xl p-4 grid grid-cols-1 sm:grid-cols-5 gap-3 text-[12.5px]"
-          >
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">Actor ID</label>
-              <input
-                type="text"
-                value={auditActorId}
-                onChange={(e) => setAuditActorId(e.target.value)}
-                placeholder="UUID"
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              />
-            </div>
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">Organization</label>
-              <select
-                value={auditOrgId}
-                onChange={(e) => setAuditOrgId(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              >
-                <option value="">All organizations</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">Action</label>
-              <input
-                type="text"
-                value={auditAction}
-                onChange={(e) => setAuditAction(e.target.value)}
-                placeholder="e.g. auth.login"
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              />
-            </div>
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">From</label>
-              <input
-                type="date"
-                value={auditDateFrom}
-                onChange={(e) => setAuditDateFrom(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <label className="block text-[11.5px] font-medium text-text-secondary mb-1">To</label>
-                <input
-                  type="date"
-                  value={auditDateTo}
-                  onChange={(e) => setAuditDateTo(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-                />
-              </div>
-              <button
-                type="submit"
-                className="px-3 py-1.5 rounded-lg bg-brand text-white font-medium hover:bg-brand-hover transition-colors inline-flex items-center gap-1"
-              >
-                <Filter className="w-3.5 h-3.5" />
-                Filter
-              </button>
-            </div>
-          </form>
-
-          {auditError && (
-            <div className="bg-severity-critical-soft border border-severity-critical/30 rounded-xl p-4 flex items-center gap-2 text-[13px] text-severity-critical">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              {auditError}
-            </div>
-          )}
-
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden">
-            {auditLoading && auditEntries.length === 0 ? (
-              <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading audit log...
-              </div>
-            ) : auditEntries.length === 0 ? (
-              <div className="p-10 text-center text-text-muted text-[13px]">No audit log entries found.</div>
-            ) : (
-              <>
-                <table className="w-full text-[12.5px]">
-                  <thead className="bg-workspace-header border-b border-workspace-border">
-                    <tr className="text-left text-text-muted text-[11px] uppercase tracking-wide">
-                      <th className="px-4 py-2.5 font-semibold">Timestamp</th>
-                      <th className="px-4 py-2.5 font-semibold">Actor</th>
-                      <th className="px-4 py-2.5 font-semibold">Action</th>
-                      <th className="px-4 py-2.5 font-semibold">Resource / Target</th>
-                      <th className="px-4 py-2.5 font-semibold">Organization</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auditEntries.map((e) => (
-                      <tr key={e.id} className="border-b border-workspace-border last:border-0 hover:bg-workspace-secondary/50">
-                        <td className="px-4 py-2.5 text-text-muted font-mono text-[11.5px] whitespace-nowrap">
-                          {fmtDateTime(e.occurred_at)}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <div className="font-medium text-text-primary">{e.actor_user_id ? `User: ${e.actor_user_id.slice(0, 8)}...` : 'System'}</div>
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-[11.5px] text-brand">{e.action}</td>
-                        <td className="px-4 py-2.5 text-text-secondary font-mono text-[11.5px] truncate max-w-[200px]">
-                          {e.resource_type ? `${e.resource_type}${e.resource_id ? `:${e.resource_id.slice(0, 8)}...` : ''}` : '—'}
-                        </td>
-                        <td className="px-4 py-2.5 text-text-muted font-mono text-[11.5px]">
-                          {e.organization_id ? (organizations.find(o => o.id === e.organization_id)?.name || `${e.organization_id.slice(0, 8)}...`) : 'Global / Platform'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="p-3 bg-workspace-header border-t border-workspace-border flex justify-center">
-                  <button
-                    onClick={handleLoadMoreAudit}
-                    disabled={auditLoading}
-                    className="text-[12.5px] text-brand hover:text-brand-hover font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
-                  >
-                    {auditLoading && <Loader2 className="w-3 h-3 animate-spin" />}
-                    Load more audit entries
-                  </button>
-                </div>
-              </>
             )}
           </div>
         </section>
