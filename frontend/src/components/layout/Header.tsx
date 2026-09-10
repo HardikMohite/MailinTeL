@@ -131,7 +131,7 @@ const UserMenu: React.FC = () => {
         <div className="hidden sm:block leading-tight text-left">
           <div className="text-[13px] font-semibold text-text-primary truncate max-w-[140px]">{displayName}</div>
           <div className="text-[11px] text-text-muted truncate max-w-[140px]">
-            {user.organization_name || 'No organization'}
+            {user.organization_name || 'Personal Workspace'}
           </div>
         </div>
         <ChevronDown className="hidden sm:block w-3.5 h-3.5 text-text-muted" />

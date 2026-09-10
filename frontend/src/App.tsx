@@ -26,7 +26,7 @@ export const App: React.FC = () => {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [detailedHealth, setDetailedHealth] = useState<DetailedHealthResponse | null>(null);
   const [loadingHealth, setLoadingHealth] = useState<boolean>(true);
-  const [focalEmailId, setFocalEmailId] = useState<string>('');
+  const [focalEmailId, setFocalEmailId] = useState<string>('7b1e3176-1a35-40cc-a13f-b45f4fb257b0');
   // Set by the axios interceptor on any request that gets no response at all
   // (backend unreachable, CORS rejection, timeout) — see services/api.ts.
   const [isOffline, setIsOffline] = useState<boolean>(false);

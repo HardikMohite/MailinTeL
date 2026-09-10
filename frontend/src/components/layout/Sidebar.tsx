@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   LayoutDashboard,
   UploadCloud,
@@ -10,20 +9,11 @@ import {
   FolderLock,
   FileText,
   Settings,
-  Users,
   ShieldCheck,
   ExternalLink,
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
 import { useAuth } from '../../context/AuthContext';
-
-// Roles that keep organization-wide visibility on the backend (see
-// app.api.deps.ANALYST_ROLES): SECURITY_ANALYST, CYBER_CELL_INVESTIGATOR,
-// INSTITUTION_ADMIN, SYSTEM_ADMIN. A plain "USER" account is scoped down to
-// its own uploads/campaigns and gets a 403 from the correlation graph and
-// the team roster — those nav items are hidden for that role so the UI
-// doesn't dangle links that always error out.
-const ANALYST_AND_UP_ROLES = ['SECURITY_ANALYST', 'CYBER_CELL_INVESTIGATOR', 'INSTITUTION_ADMIN', 'SYSTEM_ADMIN'];
 
 export type NavTab =
   | 'dashboard'
@@ -55,14 +45,7 @@ interface NavSection {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
-  const { user, isAdmin, isCrossOrg } = useAuth();
-  const isAnalystAndUp = !!user?.role && ANALYST_AND_UP_ROLES.includes(user.role);
-  const canManageTeam = isAdmin() && !isCrossOrg() || user?.role === 'SYSTEM_ADMIN';
-  // Cross-org /platform/* administration (org creation, cross-org
-  // invite/role-change/deactivate, audit log) is SYSTEM_ADMIN only — a
-  // narrower gate than isCrossOrg() alone, which also covers
-  // CYBER_CELL_INVESTIGATOR. Reuses the existing AuthContext helper rather
-  // than re-deriving cross-org membership here.
+  const { user, isCrossOrg } = useAuth();
   const canAccessPlatformAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
 
   const sections: NavSection[] = canAccessPlatformAdmin
@@ -95,7 +78,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
         {
           title: 'Governance & Access',
           items: [
-            ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'PLANNED' },
           ],
         },
@@ -123,7 +105,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           items: [
             { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
             { id: 'reports', label: 'Forensic Reports', icon: FileText },
-            ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'PLANNED' },
           ],
         },
