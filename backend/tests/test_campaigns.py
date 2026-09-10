@@ -386,3 +386,120 @@ def test_api_get_email_correlations_endpoint():
         data = resp.json()
         assert data["email_id"] == str(email_id)
         assert data["total_correlated_emails"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_campaign_details_includes_targeted_users():
+    """Verify get_campaign_details aggregates targeted recipients across member emails."""
+    service = CampaignCorrelationService()
+    session = AsyncMock()
+
+    camp_id = uuid.uuid4()
+    email_id1 = uuid.uuid4()
+    email_id2 = uuid.uuid4()
+
+    mock_campaign = Campaign(
+        id=camp_id,
+        campaign_name="Targeted Phishing Cluster",
+        campaign_status="ACTIVE",
+        campaign_confidence=85.0,
+        threat_summary="Attacker targeting finance users",
+        first_detected_at=datetime.now(timezone.utc),
+        last_activity_at=datetime.now(timezone.utc),
+    )
+
+    mem1 = CampaignMembership(id=uuid.uuid4(), campaign_id=camp_id, email_id=email_id1, membership_confidence=90.0)
+    mem2 = CampaignMembership(id=uuid.uuid4(), campaign_id=camp_id, email_id=email_id2, membership_confidence=90.0)
+
+    # Mock execute results
+    # 1. select Campaign
+    res_c = MagicMock()
+    res_c.scalar_one_or_none.return_value = mock_campaign
+
+    # 2. select CampaignMembership
+    now = datetime.now(timezone.utc)
+    u_id = uuid.uuid4()
+    # 2. select CampaignMembership, Email.subject, sender, dates, qual, status, uploader
+    res_m = MagicMock()
+    res_m.all.return_value = [
+        (mem1, "Urgent Payroll Update", "attacker@phish.test", now, now, now, "CRITICAL", "COMPLETED", u_id, "Asmodeus", "asmodeus.loh01@gmail.com"),
+        (mem2, "Action Required: Tax Info", "attacker@phish.test", now, now, now, "HIGH", "COMPLETED", u_id, "Asmodeus", "asmodeus.loh01@gmail.com"),
+    ]
+
+    # 3. select EmailRecipient across emails (14 values)
+    res_r = MagicMock()
+    res_r.all.return_value = [
+        ("cfo@victim.org", "Chief Financial Officer", email_id1, "Urgent Payroll Update", "attacker@phish.test", now, "CRITICAL", "COMPLETED", now, None, None, u_id, "Asmodeus", "asmodeus.loh01@gmail.com"),
+        ("cfo@victim.org", "Chief Financial Officer", email_id2, "Action Required: Tax Info", "attacker@phish.test", now, "HIGH", "COMPLETED", now, None, None, u_id, "Asmodeus", "asmodeus.loh01@gmail.com"),
+        ("accountant@victim.org", "Lead Accountant", email_id1, "Urgent Payroll Update", "attacker@phish.test", now, "CRITICAL", "COMPLETED", now, None, None, u_id, "Asmodeus", "asmodeus.loh01@gmail.com"),
+    ]
+
+    # 4. select CampaignEvidence
+    res_ev = MagicMock()
+    res_ev.scalars.return_value.all.return_value = []
+
+    # 5. select CampaignEvent
+    res_evt = MagicMock()
+    res_evt.scalars.return_value.all.return_value = []
+
+    session.execute.side_effect = [res_c, res_m, res_r, res_ev, res_evt]
+
+    details = await service.get_campaign_details(session, camp_id)
+    assert details is not None
+    assert "targeted_users" in details
+    assert len(details["targeted_users"]) == 2
+    assert "reporting_users" in details
+    assert len(details["reporting_users"]) == 1
+    assert details["reporting_users"][0]["username"] == "Asmodeus"
+
+    # cfo@victim.org received 2 emails
+    cfo = next(u for u in details["targeted_users"] if u["recipient_address"] == "cfo@victim.org")
+    assert cfo["emails_count"] == 2
+    assert len(cfo["emails"]) == 2
+    assert cfo["display_name"] == "Chief Financial Officer"
+    assert cfo["emails"][0]["submitted_by_name"] == "Asmodeus"
+
+    # accountant@victim.org received 1 email
+    accountant = next(u for u in details["targeted_users"] if u["recipient_address"] == "accountant@victim.org")
+    assert accountant["emails_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_detect_distributed_attack_campaigns():
+    """Verify detect_distributed_attack_campaigns clusters emails targeting >= N distinct users."""
+    service = CampaignCorrelationService()
+    session = AsyncMock()
+
+    eid1 = uuid.uuid4()
+    eid2 = uuid.uuid4()
+    eid3 = uuid.uuid4()
+    org_id = uuid.uuid4()
+
+    # Query returns 3 emails from same sender to 3 distinct victims with org_id
+    mock_res = MagicMock()
+    mock_res.all.return_value = [
+        (eid1, "hacker@apt.test", "Invoice 1", datetime.now(timezone.utc), "alice@corp.test", "198.51.100.22", org_id),
+        (eid2, "hacker@apt.test", "Invoice 2", datetime.now(timezone.utc), "bob@corp.test", "198.51.100.22", org_id),
+        (eid3, "hacker@apt.test", "Invoice 3", datetime.now(timezone.utc), "charlie@corp.test", "198.51.100.22", org_id),
+    ]
+
+    # Mock existing check returning None (no prior campaign with this name)
+    mock_existing = MagicMock()
+    mock_existing.scalar_one_or_none.return_value = None
+
+    session.execute.side_effect = [mock_res, mock_existing, mock_existing]
+
+    mock_camp = Campaign(
+        id=uuid.uuid4(),
+        campaign_name="Targeted Campaign: hacker@apt.test (3 Users)",
+        campaign_status="ACTIVE",
+    )
+
+    with patch.object(service, "create_campaign", new=AsyncMock(return_value=mock_camp)):
+        clusters = await service.detect_distributed_attack_campaigns(session, min_targets=2)
+        assert len(clusters) >= 1
+        c = clusters[0]
+        assert "hacker@apt.test" in c["campaign_name"]
+        assert c["targeted_users_count"] == 3
+        assert c["members_count"] == 3
+

@@ -5,12 +5,15 @@ from typing import List, Dict, Any, Optional, Set
 from sqlalchemy import select, and_, or_, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.emails import Email, EmailSource, RelayHop
+from app.models.emails import Email, EmailSource, RelayHop, EmailRecipient
 from app.models.dna import EmailDNAProfile, EmailSimilarityLink
 from app.models.intelligence import URL, EmailURL, Domain, IPAddress
 from app.models.evidence import EvidenceObject
 from app.models.campaign import Campaign, CampaignMembership, CampaignEvidence, CampaignEvent
+from app.models.identity import User
+from app.models.analysis import EmailAnalysis
 from app.campaigns.correlation_engine import default_correlation_engine, CorrelationEngine, CorrelationResult
+from sqlalchemy.orm import aliased
 
 logger = logging.getLogger("mailintel.services.campaigns")
 
@@ -374,24 +377,137 @@ class CampaignCorrelationService:
         if not c:
             return None
 
-        # Fetch memberships with email subjects
+        # Fetch memberships with email subjects, real timestamps, and uploader user metadata
         m_res = await session.execute(
-            select(CampaignMembership, Email.subject, Email.sender_address)
+            select(
+                CampaignMembership,
+                Email.subject,
+                Email.sender_address,
+                Email.sent_at,
+                Email.received_at,
+                Email.created_at,
+                Email.qualification_status,
+                Email.analysis_status,
+                EmailSource.user_id,
+                User.full_name,
+                User.email,
+            )
             .join(Email, Email.id == CampaignMembership.email_id)
+            .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+            .outerjoin(User, EmailSource.user_id == User.id)
             .where(CampaignMembership.campaign_id == campaign_id)
         )
         memberships_data = []
-        for m, subj, sender in m_res.all():
+        member_email_ids: List[uuid.UUID] = []
+        real_dates: List[datetime] = []
+        reporting_users_map: Dict[str, Dict[str, Any]] = {}
+
+        for m, subj, sender, sent_at, recvd_at, created_at, qual, astatus, uploader_id, uploader_name, uploader_email in m_res.all():
+            member_email_ids.append(m.email_id)
+            dt = sent_at or recvd_at or created_at
+            if dt:
+                real_dates.append(dt)
+
+            if uploader_id:
+                uid_str = str(uploader_id)
+                if uid_str not in reporting_users_map:
+                    reporting_users_map[uid_str] = {
+                        "user_id": uid_str,
+                        "username": uploader_name or uploader_email or "Unknown",
+                        "email": uploader_email or "",
+                        "emails_count": 0,
+                    }
+                reporting_users_map[uid_str]["emails_count"] += 1
+
             memberships_data.append({
                 "id": str(m.id),
                 "email_id": str(m.email_id),
                 "email_subject": subj,
                 "email_sender": sender,
+                "submitted_by_id": str(uploader_id) if uploader_id else None,
+                "submitted_by_name": uploader_name or uploader_email or "Direct Ingest",
+                "submitted_by_email": uploader_email,
                 "membership_confidence": float(m.membership_confidence),
                 "membership_status": m.membership_status,
                 "evidence_summary": m.evidence_summary or {},
-                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "created_at": (sent_at or created_at or m.created_at).isoformat() if (sent_at or created_at or m.created_at) else None,
+                "sent_at": sent_at.isoformat() if sent_at else None,
             })
+
+        reporting_users = list(reporting_users_map.values())
+
+        # Dynamically compute observed campaign date bounds from real email timestamps
+        real_first_detected = min(real_dates).isoformat() if real_dates else (c.first_detected_at.isoformat() if c.first_detected_at else None)
+        real_last_activity = max(real_dates).isoformat() if real_dates else (c.last_activity_at.isoformat() if c.last_activity_at else None)
+
+        # Fetch targeted recipients/users across member emails
+        targeted_users: List[Dict[str, Any]] = []
+        if member_email_ids:
+            UploaderUser = aliased(User)
+            RegisteredRecipientUser = aliased(User)
+
+            recip_stmt = (
+                select(
+                    EmailRecipient.address,
+                    EmailRecipient.display_name,
+                    Email.id,
+                    Email.subject,
+                    Email.sender_address,
+                    Email.sent_at,
+                    Email.qualification_status,
+                    Email.analysis_status,
+                    Email.created_at,
+                    RegisteredRecipientUser.id.label("registered_user_id"),
+                    RegisteredRecipientUser.full_name.label("registered_user_name"),
+                    EmailSource.user_id.label("uploader_id"),
+                    UploaderUser.full_name.label("uploader_name"),
+                    UploaderUser.email.label("uploader_email"),
+                )
+                .join(Email, Email.id == EmailRecipient.email_id)
+                .outerjoin(RegisteredRecipientUser, func.lower(RegisteredRecipientUser.email) == func.lower(EmailRecipient.address))
+                .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+                .outerjoin(UploaderUser, EmailSource.user_id == UploaderUser.id)
+                .where(EmailRecipient.email_id.in_(member_email_ids))
+            )
+            recip_res = await session.execute(recip_stmt)
+            targeted_map: Dict[str, Dict[str, Any]] = {}
+            for addr, dname, eid, subj, sender, sent_at, qual, astatus, created_at, reg_uid, reg_uname, uploader_id, uploader_name, uploader_email in recip_res.all():
+                if not addr:
+                    continue
+                norm = addr.strip().lower()
+                if norm not in targeted_map:
+                    effective_display_name = dname or reg_uname or None
+                    targeted_map[norm] = {
+                        "recipient_address": addr.strip(),
+                        "display_name": effective_display_name,
+                        "is_internal_account": reg_uid is not None,
+                        "emails_count": 0,
+                        "first_targeted_at": None,
+                        "last_targeted_at": None,
+                        "emails": [],
+                    }
+                entry = targeted_map[norm]
+                entry["emails_count"] += 1
+                if (dname or reg_uname) and not entry["display_name"]:
+                    entry["display_name"] = dname or reg_uname
+                ts = (sent_at or created_at).isoformat() if (sent_at or created_at) else None
+                if ts:
+                    if not entry["first_targeted_at"] or ts < entry["first_targeted_at"]:
+                        entry["first_targeted_at"] = ts
+                    if not entry["last_targeted_at"] or ts > entry["last_targeted_at"]:
+                        entry["last_targeted_at"] = ts
+                entry["emails"].append({
+                    "id": str(eid),
+                    "subject": subj,
+                    "sender_address": sender,
+                    "sent_at": ts,
+                    "qualification_status": qual or "SUSPICIOUS",
+                    "analysis_status": astatus or "COMPLETED",
+                    "submitted_by_id": str(uploader_id) if uploader_id else None,
+                    "submitted_by_name": uploader_name or uploader_email or "System Ingest",
+                    "submitted_by_email": uploader_email,
+                })
+            targeted_users = sorted(targeted_map.values(), key=lambda x: x["emails_count"], reverse=True)
 
         # Fetch evidence items
         ev_res = await session.execute(
@@ -431,11 +547,13 @@ class CampaignCorrelationService:
             "campaign_status": c.campaign_status,
             "campaign_confidence": float(c.campaign_confidence),
             "threat_summary": c.threat_summary,
-            "first_detected_at": c.first_detected_at.isoformat() if c.first_detected_at else None,
-            "last_activity_at": c.last_activity_at.isoformat() if c.last_activity_at else None,
+            "first_detected_at": real_first_detected,
+            "last_activity_at": real_last_activity,
             "total_members": len(memberships_data),
             "total_evidence_links": len(evidence_data),
             "memberships": memberships_data,
+            "targeted_users": targeted_users,
+            "reporting_users": reporting_users,
             "evidence": evidence_data,
             "events": events_data,
         }
@@ -554,25 +672,220 @@ class CampaignCorrelationService:
             ),
         }
 
+    async def detect_distributed_attack_campaigns(
+        self,
+        session: AsyncSession,
+        min_targets: int = 2,
+        organization_id: Optional[uuid.UUID] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Discovers distributed multi-user phishing attacks where a single adversary
+        (sender address or originating relay IP) sends emails targeting multiple
+        distinct users / mailboxes (>= min_targets).
+        """
+        base_query = (
+            select(
+                Email.id,
+                Email.sender_address,
+                Email.subject,
+                Email.created_at,
+                EmailRecipient.address.label("recipient_address"),
+                RelayHop.source_ip,
+                EmailSource.organization_id.label("email_org_id"),
+            )
+            .outerjoin(EmailRecipient, Email.id == EmailRecipient.email_id)
+            .outerjoin(RelayHop, and_(Email.id == RelayHop.email_id, RelayHop.sequence_number == 1))
+            .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+            .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
+            .where(
+                or_(
+                    EmailAnalysis.threat_classification.in_(["SUSPICIOUS", "MALICIOUS", "PHISHING", "SPOOFING"]),
+                    EmailAnalysis.threat_risk_score >= 40.0,
+                    Email.qualification_status.in_(["SUSPICIOUS", "HIGH_RISK", "MALICIOUS", "CAMPAIGN_RELATED", "QUALIFIED_FOR_INVESTIGATION"]),
+                )
+            )
+        )
+        if organization_id is not None:
+            base_query = base_query.where(
+                EmailSource.organization_id == organization_id
+            )
+
+        result = await session.execute(base_query)
+        rows = result.all()
+        if not rows:
+            return []
+
+        # Group emails by sender_address and by originating source_ip
+        senders_map: Dict[str, Dict[str, Any]] = {}
+        ips_map: Dict[str, Dict[str, Any]] = {}
+
+        for eid, sender, subj, created_at, recip_addr, source_ip, email_org_id in rows:
+            if not recip_addr:
+                continue
+            recip_norm = recip_addr.strip().lower()
+
+            if sender and sender.strip():
+                sndr_key = sender.strip().lower()
+                if sndr_key not in senders_map:
+                    senders_map[sndr_key] = {
+                        "key_type": "SENDER",
+                        "identifier": sender.strip(),
+                        "email_ids": set(),
+                        "recipients": set(),
+                        "org_ids": set(),
+                    }
+                senders_map[sndr_key]["email_ids"].add(eid)
+                senders_map[sndr_key]["recipients"].add(recip_norm)
+                if email_org_id:
+                    senders_map[sndr_key]["org_ids"].add(email_org_id)
+
+            if source_ip and source_ip.strip():
+                ip_key = source_ip.strip()
+                if ip_key not in ips_map:
+                    ips_map[ip_key] = {
+                        "key_type": "ORIGINATING_IP",
+                        "identifier": ip_key,
+                        "email_ids": set(),
+                        "recipients": set(),
+                        "org_ids": set(),
+                    }
+                ips_map[ip_key]["email_ids"].add(eid)
+                ips_map[ip_key]["recipients"].add(recip_norm)
+                if email_org_id:
+                    ips_map[ip_key]["org_ids"].add(email_org_id)
+
+        candidate_clusters: List[Dict[str, Any]] = []
+        for group in list(senders_map.values()) + list(ips_map.values()):
+            if len(group["recipients"]) >= min_targets:
+                candidate_clusters.append(group)
+
+        created_campaigns: List[Dict[str, Any]] = []
+
+        for cluster in candidate_clusters:
+            key_type = cluster["key_type"]
+            ident = cluster["identifier"]
+            eids = list(cluster["email_ids"])
+            recip_count = len(cluster["recipients"])
+            cluster_org_ids = cluster.get("org_ids", set())
+            target_org_id = organization_id or (next(iter(cluster_org_ids)) if cluster_org_ids else None)
+
+            camp_name = f"Targeted Campaign: {ident} ({recip_count} Users)"
+            camp_query = select(Campaign).where(Campaign.campaign_name == camp_name)
+            if target_org_id is not None:
+                camp_query = camp_query.where(
+                    or_(Campaign.organization_id.is_(None), Campaign.organization_id == target_org_id)
+                )
+            existing_res = await session.execute(camp_query)
+            existing_camp = existing_res.scalar_one_or_none()
+
+            if existing_camp:
+                if existing_camp.organization_id is None and target_org_id is not None:
+                    existing_camp.organization_id = target_org_id
+                    session.add(existing_camp)
+                    await session.commit()
+                for eid in eids:
+                    await self.add_email_to_campaign(
+                        session=session,
+                        campaign_id=existing_camp.id,
+                        email_id=eid,
+                        membership_confidence=85.0,
+                        organization_id=target_org_id,
+                    )
+                created_campaigns.append({
+                    "campaign_id": str(existing_camp.id),
+                    "campaign_name": existing_camp.campaign_name,
+                    "members_count": len(eids),
+                    "targeted_users_count": recip_count,
+                })
+                continue
+
+            confidence = min(95.0, 75.0 + recip_count * 3.0)
+            campaign = await self.create_campaign(
+                session=session,
+                campaign_name=camp_name,
+                threat_summary=(
+                    f"Coordinated multi-user attack from {key_type.lower()} '{ident}' "
+                    f"targeting {recip_count} distinct mailboxes across the organization."
+                ),
+                campaign_confidence=confidence,
+                initial_email_ids=eids,
+                organization_id=target_org_id,
+            )
+
+            # Add CampaignEvidence record
+            ev = CampaignEvidence(
+                campaign_id=campaign.id,
+                evidence_type="MULTI_USER_TARGETING",
+                confidence=confidence,
+                explanation=(
+                    f"Adversary {key_type.lower()} '{ident}' dispatched emails across {recip_count} distinct users: "
+                    f"{', '.join(sorted(cluster['recipients'])[:5])}"
+                ),
+            )
+            session.add(ev)
+
+            # Add CampaignEvent
+            evt = CampaignEvent(
+                campaign_id=campaign.id,
+                event_type="DISTRIBUTED_ATTACK_DETECTED",
+                occurred_at=datetime.now(timezone.utc),
+                description=f"Multi-user attack flagged: {recip_count} mailboxes targeted by {ident}.",
+                metadata_json={
+                    "identifier": ident,
+                    "key_type": key_type,
+                    "targeted_users_count": recip_count,
+                    "email_count": len(eids),
+                },
+            )
+            session.add(evt)
+            await session.commit()
+
+            created_campaigns.append({
+                "campaign_id": str(campaign.id),
+                "campaign_name": campaign.campaign_name,
+                "members_count": len(eids),
+                "targeted_users_count": recip_count,
+            })
+
+        return created_campaigns
+
     async def auto_cluster_campaigns(
         self,
         session: AsyncSession,
         min_correlation_score: float = 60.0,
+        min_targets: int = 2,
         organization_id: Optional[uuid.UUID] = None,
     ) -> List[Dict[str, Any]]:
         """
         Discovers correlation clusters across all emails, creating or linking campaigns
         while preserving overlapping bridge entities without destructive partition mergers.
+        Also discovers distributed multi-user targeting campaigns.
 
         SECURITY: `organization_id` restricts clustering to the caller's own
-        tenant. Without it this would cluster and permanently link emails
-        (and their subjects, senders, and forensic evidence) across every
-        organization on the platform into shared Campaign rows — a
-        cross-tenant data leak baked directly into the database, not just a
-        response. Callers MUST pass the caller's organization_id.
+        tenant. Callers MUST pass the caller's organization_id.
         """
-        # Fetch candidate emails, scoped to the caller's organization
-        emails_stmt = select(Email.id)
+        created_campaigns: List[Dict[str, Any]] = []
+
+        # 1. Discover multi-user targeting distributed attacks
+        distributed_campaigns = await self.detect_distributed_attack_campaigns(
+            session=session,
+            min_targets=min_targets,
+            organization_id=organization_id,
+        )
+        created_campaigns.extend(distributed_campaigns)
+
+        # 2. Discover pairwise multi-signal correlation clusters
+        emails_stmt = (
+            select(Email.id)
+            .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
+            .where(
+                or_(
+                    EmailAnalysis.threat_classification.in_(["SUSPICIOUS", "MALICIOUS", "PHISHING", "SPOOFING"]),
+                    EmailAnalysis.threat_risk_score >= 40.0,
+                    Email.qualification_status.in_(["SUSPICIOUS", "HIGH_RISK", "MALICIOUS", "CAMPAIGN_RELATED", "QUALIFIED_FOR_INVESTIGATION"]),
+                )
+            )
+        )
         if organization_id is not None:
             emails_stmt = emails_stmt.join(
                 EmailSource, EmailSource.id == Email.source_id
@@ -580,7 +893,7 @@ class CampaignCorrelationService:
         emails_res = await session.execute(emails_stmt)
         all_ids = [r[0] for r in emails_res.all()]
         if len(all_ids) < 2:
-            return []
+            return created_campaigns
 
         # Map of email_id -> list of correlated (other_id, score, reason)
         corr_graph: Dict[uuid.UUID, List[Dict[str, Any]]] = {eid: [] for eid in all_ids}
@@ -591,8 +904,6 @@ class CampaignCorrelationService:
             )
             for c in corr_list:
                 corr_graph[eid].append(c)
-
-        created_campaigns: List[Dict[str, Any]] = []
 
         # Find connected clusters (cliques / connected subgraphs)
         visited: Set[uuid.UUID] = set()
@@ -609,10 +920,34 @@ class CampaignCorrelationService:
                     primary_reasons.append(item["primary_link_reason"])
 
             if len(cluster_members) >= 2:
-                # Name campaign based on primary link reason or generated moniker
                 top_reason = primary_reasons[0] if primary_reasons else "Multi-signal Correlation"
                 camp_name = f"Cluster: {top_reason[:40]}"
-                
+
+                camp_query = select(Campaign).where(Campaign.campaign_name == camp_name)
+                if organization_id is not None:
+                    camp_query = camp_query.where(
+                        or_(Campaign.organization_id.is_(None), Campaign.organization_id == organization_id)
+                    )
+                existing_res = await session.execute(camp_query)
+                existing_camp = existing_res.scalar_one_or_none()
+
+                if existing_camp:
+                    for mid in cluster_members:
+                        await self.add_email_to_campaign(
+                            session=session,
+                            campaign_id=existing_camp.id,
+                            email_id=mid,
+                            membership_confidence=75.0,
+                            organization_id=organization_id,
+                        )
+                    created_campaigns.append({
+                        "campaign_id": str(existing_camp.id),
+                        "campaign_name": existing_camp.campaign_name,
+                        "members_count": len(cluster_members),
+                    })
+                    visited.update(cluster_members)
+                    continue
+
                 campaign = await self.create_campaign(
                     session=session,
                     campaign_name=camp_name,
@@ -622,7 +957,6 @@ class CampaignCorrelationService:
                     organization_id=organization_id,
                 )
                 
-                # Add CampaignEvidence record
                 ev = CampaignEvidence(
                     campaign_id=campaign.id,
                     evidence_type="CORRELATION_CLUSTER",

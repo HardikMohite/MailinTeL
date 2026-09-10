@@ -66,6 +66,10 @@ class CampaignMembershipItem(BaseModel):
     email_id: str
     email_subject: Optional[str] = None
     email_sender: Optional[str] = None
+    submitted_by_id: Optional[str] = None
+    submitted_by_name: Optional[str] = None
+    submitted_by_email: Optional[str] = None
+    sent_at: Optional[str] = None
     membership_confidence: float
     membership_status: str
     evidence_summary: Dict[str, Any] = Field(default_factory=dict)
@@ -88,6 +92,35 @@ class CampaignEventItem(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TargetedUserEmailItem(BaseModel):
+    id: str
+    subject: Optional[str] = None
+    sender_address: Optional[str] = None
+    sent_at: Optional[str] = None
+    qualification_status: Optional[str] = None
+    analysis_status: Optional[str] = None
+    submitted_by_id: Optional[str] = None
+    submitted_by_name: Optional[str] = None
+    submitted_by_email: Optional[str] = None
+
+
+class TargetedUserSummary(BaseModel):
+    recipient_address: str
+    display_name: Optional[str] = None
+    is_internal_account: bool = False
+    emails_count: int
+    first_targeted_at: Optional[str] = None
+    last_targeted_at: Optional[str] = None
+    emails: List[TargetedUserEmailItem] = Field(default_factory=list)
+
+
+class ReportingUserSummary(BaseModel):
+    user_id: str
+    username: str
+    email: str
+    emails_count: int
+
+
 class CampaignDetailResponse(BaseModel):
     id: str
     campaign_name: Optional[str] = None
@@ -99,6 +132,8 @@ class CampaignDetailResponse(BaseModel):
     total_members: int
     total_evidence_links: int
     memberships: List[CampaignMembershipItem] = Field(default_factory=list)
+    targeted_users: List[TargetedUserSummary] = Field(default_factory=list)
+    reporting_users: List[ReportingUserSummary] = Field(default_factory=list)
     evidence: List[CampaignEvidenceItem] = Field(default_factory=list)
     events: List[CampaignEventItem] = Field(default_factory=list)
 
@@ -319,6 +354,7 @@ async def get_email_campaign_memberships(
 )
 async def auto_cluster_campaigns(
     min_score: float = Query(60.0, ge=0.0, le=100.0, description="Minimum correlation threshold for clustering"),
+    min_targets: int = Query(2, ge=2, le=50, description="Minimum distinct user targets required to establish a distributed campaign"),
     session: AsyncSession = Depends(get_db),
     # MVP-04: creates/mutates campaigns, so analyst-and-up.
     current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
@@ -326,9 +362,13 @@ async def auto_cluster_campaigns(
     """
     Discovers correlated clusters across the caller's organization's emails, creating or linking campaigns
     while preserving overlapping bridge entities without destructive partition mergers.
+    Also detects multi-user distributed attack campaigns.
     """
     clusters = await default_campaign_service.auto_cluster_campaigns(
-        session, min_correlation_score=min_score, organization_id=current_user.organization_id
+        session,
+        min_correlation_score=min_score,
+        min_targets=min_targets,
+        organization_id=current_user.organization_id,
     )
     return AutoClusterResponse(
         total_clusters_created=len(clusters),
