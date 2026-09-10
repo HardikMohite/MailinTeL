@@ -22,6 +22,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { DashboardView } from '../components/dashboard/DashboardView';
+import { OrganizationView } from '../components/settings/OrganizationView';
 import {
   listPlatformOrganizations,
   listPlatformUsers,
@@ -81,8 +82,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
 
   // --- Organizations (cached for cross-section filters) -------------
   const [organizations, setOrganizations] = useState<OrganizationItem[]>([]);
-  const [orgsLoading, setOrgsLoading] = useState(true);
-  const [orgsError, setOrgsError] = useState<string | null>(null);
 
   // --- Cross-org users -------------------------------------------------
   const [members, setMembers] = useState<PlatformMember[]>([]);
@@ -125,17 +124,13 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   }, [emailQualFilter, emailOrgFilter, parseApiError]);
 
   const loadOrganizations = useCallback(async () => {
-    setOrgsLoading(true);
-    setOrgsError(null);
     try {
       const data = await listPlatformOrganizations();
       setOrganizations(data);
-    } catch (err) {
-      setOrgsError(parseApiError(err).message);
-    } finally {
-      setOrgsLoading(false);
+    } catch {
+      // Non-fatal fallback for dropdown filters
     }
-  }, [parseApiError]);
+  }, []);
 
   const loadMembers = useCallback(
     async (orgId: string) => {
@@ -626,53 +621,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
 
       {/* SECTION 2: ORGANIZATIONS */}
       {activeSection === 'organizations' && (
-        <section className="space-y-3">
-
-          {orgsError && (
-            <div className="bg-severity-critical-soft border border-severity-critical/30 rounded-xl p-4 flex items-center gap-2 text-[13px] text-severity-critical">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              {orgsError}
-            </div>
-          )}
-
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden shadow-xs">
-            <div className="px-4 py-3 border-b border-workspace-border flex items-center justify-between">
-              <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                All Organizations ({organizations.length})
-              </span>
-            </div>
-            {orgsLoading ? (
-              <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading organizations...
-              </div>
-            ) : organizations.length === 0 ? (
-              <div className="p-10 text-center text-text-muted text-[13px]">No organizations found.</div>
-            ) : (
-              <table className="w-full text-[13px]">
-                <thead className="bg-workspace-header border-b border-workspace-border">
-                  <tr className="text-left text-text-muted text-[11.5px] uppercase tracking-wide">
-                    <th className="px-4 py-2.5 font-semibold">Organization</th>
-                    <th className="px-4 py-2.5 font-semibold">Type</th>
-                    <th className="px-4 py-2.5 font-semibold">Status</th>
-                    <th className="px-4 py-2.5 font-semibold">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {organizations.map((org) => (
-                    <tr key={org.id} className="border-b border-workspace-border last:border-0 hover:bg-workspace-secondary/50">
-                      <td className="px-4 py-3 font-medium text-text-primary">{org.name}</td>
-                      <td className="px-4 py-3 text-text-secondary">{org.organization_type}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge type="severity" value={org.status === 'ACTIVE' ? 'safe' : 'critical'} label={org.status} size="sm" />
-                      </td>
-                      <td className="px-4 py-3 text-text-muted">{fmtDateTime(org.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
+        <OrganizationView />
       )}
 
       {/* SECTION 3: USERS ACROSS ORGANIZATIONS */}
