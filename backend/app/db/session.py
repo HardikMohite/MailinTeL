@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from sqlalchemy.pool import NullPool
+
 from app.core.config import settings
 
 logger = logging.getLogger("mailintel.db")
@@ -35,17 +37,23 @@ def get_engine_connect_args() -> Dict[str, Any]:
     return args
 
 
-# Determine engine pooling options: keep warm pooled connections alive
+# Determine engine pooling options
 _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,
     "future": True,
-    "pool_pre_ping": True,
-    "pool_size": 10,
-    "max_overflow": 20,
-    "pool_timeout": 30,
-    "pool_recycle": 300,
 }
+
+# Supabase Supavisor pooler manages pooling externally. Keeping an internal connection
+# pool in SQLAlchemy causes WinError 10054 / ConnectionResetError when Supavisor closes idle sockets.
+if settings.is_pooler_connection or settings.is_supabase_db:
+    _engine_kwargs["poolclass"] = NullPool
+else:
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 20
+    _engine_kwargs["pool_timeout"] = 30
+    _engine_kwargs["pool_recycle"] = 180
 
 # Create Async Engine for PostgreSQL
 engine: AsyncEngine = create_async_engine(
