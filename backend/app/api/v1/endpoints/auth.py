@@ -251,3 +251,69 @@ async def read_current_user(current_user: CurrentUser = Depends(get_current_user
         organization_name=current_user.organization_name,
         role=current_user.role_code,
     )
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=255)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def _password_policy(cls, v: str) -> str:
+        error = is_password_strong_enough(v)
+        if error:
+            raise ValueError(error)
+        return v
+
+
+@router.put("/profile", response_model=UserPublic, summary="Update current user profile")
+async def update_profile(
+    payload: UpdateProfileRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserPublic:
+    user = await db.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found")
+
+    user.full_name = payload.full_name.strip()
+    user.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return UserPublic(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        organization_id=str(current_user.organization_id) if current_user.organization_id else None,
+        organization_name=current_user.organization_name,
+        role=current_user.role_code,
+    )
+
+
+@router.put("/change-password", summary="Change current user password")
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    user = await db.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found")
+
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    user.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    logger.info("User '%s' updated their password.", user.email)
+    return {"status": "success", "message": "Password has been updated successfully."}
+

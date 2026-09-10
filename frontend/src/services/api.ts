@@ -133,6 +133,20 @@ export const getCurrentUser = async (): Promise<AuthUser> => {
   return response.data;
 };
 
+export const updateProfile = async (fullName: string): Promise<AuthUser> => {
+  const response = await apiClient.put<AuthUser>('/auth/profile', { full_name: fullName });
+  return response.data;
+};
+
+export const changePassword = async (payload: {
+  current_password: string;
+  new_password: string;
+}): Promise<{ status: string; message: string }> => {
+  const response = await apiClient.put<{ status: string; message: string }>('/auth/change-password', payload);
+  return response.data;
+};
+
+
 export interface HealthResponse {
   status: string;
   app_name: string;
