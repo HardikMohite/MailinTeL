@@ -36,6 +36,10 @@ services:
         value: "https://.*\\.vercel\\.app"
       - key: DATABASE_URL
         sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: MAXMIND_GEOIP_DB_PATH
+        value: "data"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_KEY
