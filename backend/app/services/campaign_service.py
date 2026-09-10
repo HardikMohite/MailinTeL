@@ -15,6 +15,11 @@ from app.campaigns.correlation_engine import default_correlation_engine, Correla
 logger = logging.getLogger("mailintel.services.campaigns")
 
 
+# Fast in-memory cache for forensic bundles to eliminate redundant DB round trips
+_BUNDLE_CACHE: Dict[uuid.UUID, Tuple[float, Dict[str, Any]]] = {}
+_BUNDLE_CACHE_TTL_SECONDS: float = 1800.0  # 30 minutes
+
+
 class CampaignCorrelationService:
     """
     Service for discovering correlation signals, clustering threat campaigns,
@@ -30,6 +35,11 @@ class CampaignCorrelationService:
         email_id: uuid.UUID,
     ) -> Optional[Dict[str, Any]]:
         """Gathers all forensic artifacts, DNA, and metadata for correlation evaluation."""
+        now_ts = datetime.now(timezone.utc).timestamp()
+        cached = _BUNDLE_CACHE.get(email_id)
+        if cached and (now_ts - cached[0]) < _BUNDLE_CACHE_TTL_SECONDS:
+            return cached[1]
+
         email_res = await session.execute(select(Email).where(Email.id == email_id))
         email_obj = email_res.scalar_one_or_none()
         if not email_obj:
@@ -93,7 +103,7 @@ class CampaignCorrelationService:
             "temporal_fingerprint": dna_obj.temporal_fingerprint if dna_obj else {},
         } if dna_obj else None
 
-        return {
+        bundle = {
             "email_id": email_id,
             "subject": email_obj.subject,
             "sender_address": email_obj.sender_address,
@@ -104,6 +114,8 @@ class CampaignCorrelationService:
             "attachments": attachments,
             "dna_profile": dna_profile,
         }
+        _BUNDLE_CACHE[email_id] = (now_ts, bundle)
+        return bundle
 
     async def correlate_email(
         self,
@@ -113,15 +125,8 @@ class CampaignCorrelationService:
         organization_id: Optional[uuid.UUID] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Computes pairwise multi-signal correlation between source email and all other emails.
-
-        SECURITY: candidate emails are restricted to `organization_id` (the
-        caller's organization). Without this filter, correlation results —
-        including another tenant's subject lines, sender addresses, and
-        forensic evidence — would be computed against and returned about
-        emails the caller has no access to. Callers MUST pass the caller's
-        organization_id; it is optional only so existing internal callers
-        that have already scoped `email_id` themselves keep working.
+        Computes pairwise multi-signal correlation between source email and candidate emails.
+        Limits to top 30 most recent candidate emails to prevent unbounded processing latency.
         """
         source_bundle = await self._gather_email_forensic_bundle(session, email_id)
         if not source_bundle:
@@ -129,12 +134,10 @@ class CampaignCorrelationService:
 
         candidates_stmt = select(Email.id).where(Email.id != email_id)
         if organization_id is not None:
-            # NOTE: Email.organization_id is not populated at ingest time
-            # (only email_sources.organization_id is) — see emails.py upload
-            # flow — so tenant scoping must go through the source join.
             candidates_stmt = candidates_stmt.join(
                 EmailSource, EmailSource.id == Email.source_id
             ).where(EmailSource.organization_id == organization_id)
+        candidates_stmt = candidates_stmt.order_by(Email.created_at.desc()).limit(30)
         candidates_res = await session.execute(candidates_stmt)
         candidate_ids = [r[0] for r in candidates_res.all()]
 

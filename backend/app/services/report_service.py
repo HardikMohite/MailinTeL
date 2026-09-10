@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.storage import storage
+from app.core.redis import redis_manager
 from app.models.emails import Email, EmailRecipient, EmailAuthenticationResult, EmailHeader, RelayHop
 from app.models.evidence import EvidenceObject, CustodyEvent
 from app.models.analysis import EmailAnalysis, AnalysisFinding
@@ -29,19 +30,67 @@ ATTRIBUTION_DISCLAIMER = (
     "assist qualified human investigators."
 )
 
+# High-speed in-memory L1 cache for sub-millisecond local process hits
+_REPORT_DATA_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_REPORT_CACHE_TTL_SECONDS: float = 1800.0  # 30 minutes
+
 
 class ReportService:
     """
     Forensic Report Generation & Preservation Engine for MailIntel.
     Produces comprehensive, verifiable JSON, Markdown, and Standalone HTML dossiers.
+    Accelerated with multi-tier in-memory and Redis distributed caching.
     """
+
+    @classmethod
+    async def invalidate_report_cache(cls, email_id: uuid.UUID) -> None:
+        """Invalidates both L1 memory and L2 Redis report cache for an email."""
+        key = f"report_data:{email_id}"
+        _REPORT_DATA_CACHE.pop(key, None)
+        try:
+            await redis_manager.delete(f"cache:{key}")
+        except Exception as e:
+            logger.debug(f"Could not invalidate Redis report cache ({key}): {e}")
+
+    @classmethod
+    async def invalidate_campaign_report_cache(cls, campaign_id: uuid.UUID) -> None:
+        """Invalidates both L1 memory and L2 Redis report cache for a campaign."""
+        key = f"campaign_report_data:{campaign_id}"
+        _REPORT_DATA_CACHE.pop(key, None)
+        try:
+            await redis_manager.delete(f"cache:{key}")
+        except Exception as e:
+            logger.debug(f"Could not invalidate Redis campaign report cache ({key}): {e}")
 
     @staticmethod
     async def build_email_report_data(
         email_id: uuid.UUID,
         db: AsyncSession,
+        bypass_cache: bool = False,
     ) -> Dict[str, Any]:
-        """Aggregates all multi-layer forensic intelligence for a single email."""
+        """
+        Aggregates all multi-layer forensic intelligence for a single email.
+        Uses multi-tier L1 Memory -> L2 Redis -> Database strategy to cut latency to 1-2ms.
+        """
+        cache_key = f"report_data:{email_id}"
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        # 1. Check in-memory L1 cache (0ms latency)
+        if not bypass_cache:
+            cached_l1 = _REPORT_DATA_CACHE.get(cache_key)
+            if cached_l1 and (now_ts - cached_l1[0]) < _REPORT_CACHE_TTL_SECONDS:
+                return cached_l1[1]
+
+            # 2. Check distributed L2 Redis cache (1-2ms latency)
+            try:
+                cached_l2 = await redis_manager.get_json(f"cache:{cache_key}")
+                if cached_l2:
+                    _REPORT_DATA_CACHE[cache_key] = (now_ts, cached_l2)
+                    return cached_l2
+            except Exception as e:
+                logger.debug(f"Redis report cache check bypassed ({cache_key}): {e}")
+
+        # 3. Database Ingestion: Execute batch fetches
         # 1. Fetch Email
         stmt_email = select(Email).where(Email.id == email_id)
         res_email = await db.execute(stmt_email)
@@ -297,12 +346,40 @@ class ReportService:
             },
         }
 
+        # Store in high-speed L1 memory cache and distributed L2 Redis cache
+        _REPORT_DATA_CACHE[cache_key] = (now_ts, report_dict)
+        try:
+            await redis_manager.set_json(f"cache:{cache_key}", report_dict, expire_seconds=int(_REPORT_CACHE_TTL_SECONDS))
+        except Exception as e:
+            logger.debug(f"Redis set report cache notice ({cache_key}): {e}")
+
+        return report_dict
+
     @staticmethod
     async def build_campaign_report_data(
         campaign_id: uuid.UUID,
         db: AsyncSession,
+        bypass_cache: bool = False,
     ) -> Dict[str, Any]:
-        """Aggregates multi-email campaign dossier."""
+        """
+        Aggregates multi-email campaign dossier with Redis caching.
+        """
+        cache_key = f"campaign_report_data:{campaign_id}"
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        if not bypass_cache:
+            cached_l1 = _REPORT_DATA_CACHE.get(cache_key)
+            if cached_l1 and (now_ts - cached_l1[0]) < _REPORT_CACHE_TTL_SECONDS:
+                return cached_l1[1]
+
+            try:
+                cached_l2 = await redis_manager.get_json(f"cache:{cache_key}")
+                if cached_l2:
+                    _REPORT_DATA_CACHE[cache_key] = (now_ts, cached_l2)
+                    return cached_l2
+            except Exception as e:
+                logger.debug(f"Redis campaign cache check bypassed ({cache_key}): {e}")
+
         stmt_camp = select(Campaign).where(Campaign.id == campaign_id)
         res_camp = await db.execute(stmt_camp)
         campaign = res_camp.scalar_one_or_none()
@@ -331,7 +408,7 @@ class ReportService:
                 "added_at": memb.created_at.isoformat() if memb.created_at else None,
             })
 
-        return {
+        camp_dict = {
             "report_id": str(uuid.uuid4()),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "report_type": "CAMPAIGN_DOSSIER",
@@ -358,6 +435,14 @@ class ReportService:
                 ],
             },
         }
+
+        _REPORT_DATA_CACHE[cache_key] = (now_ts, camp_dict)
+        try:
+            await redis_manager.set_json(f"cache:{cache_key}", camp_dict, expire_seconds=int(_REPORT_CACHE_TTL_SECONDS))
+        except Exception as e:
+            logger.debug(f"Redis set campaign report cache notice: {e}")
+
+        return camp_dict
 
     @staticmethod
     def render_markdown_report(data: Dict[str, Any]) -> str:

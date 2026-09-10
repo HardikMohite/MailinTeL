@@ -35,7 +35,7 @@ from app.models.evidence import EvidenceObject, CustodyEvent
 from app.services.report_service import ReportService
 from app.core.storage import storage
 from app.core.config import settings
-
+from app.core.redis import redis_manager
 
 logger = logging.getLogger("mailintel.api.reports")
 
@@ -148,11 +148,42 @@ async def export_email_report(
     """Export formatted forensic report as downloadable file."""
     await get_authorized_email(email_id, current_user, db)
 
-    report_data = await ReportService.build_email_report_data(email_id=email_id, db=db)
     fmt = format.strip().lower()
+    cache_key = f"rendered_report:{fmt}:{email_id}"
+    try:
+        cached_content = await redis_manager.client.get(cache_key)
+        if cached_content:
+            if fmt in ("markdown", "md"):
+                filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.md"
+                return Response(
+                    content=cached_content,
+                    media_type="text/markdown",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+            elif fmt == "json":
+                filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.json"
+                return Response(
+                    content=cached_content,
+                    media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+            else:
+                filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.html"
+                return HTMLResponse(
+                    content=cached_content,
+                    headers={"Content-Disposition": f'inline; filename="{filename}"'},
+                )
+    except Exception:
+        pass
+
+    report_data = await ReportService.build_email_report_data(email_id=email_id, db=db)
 
     if fmt in ("markdown", "md"):
         content = ReportService.render_markdown_report(report_data)
+        try:
+            await redis_manager.client.set(cache_key, content, ex=1800)
+        except Exception:
+            pass
         filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.md"
         return Response(
             content=content,
@@ -161,6 +192,10 @@ async def export_email_report(
         )
     elif fmt == "json":
         content = ReportService.render_json_report(report_data)
+        try:
+            await redis_manager.client.set(cache_key, content, ex=1800)
+        except Exception:
+            pass
         filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.json"
         return Response(
             content=content,
@@ -169,6 +204,10 @@ async def export_email_report(
         )
     else:
         content = ReportService.render_html_report(report_data)
+        try:
+            await redis_manager.client.set(cache_key, content, ex=1800)
+        except Exception:
+            pass
         filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.html"
         return HTMLResponse(
             content=content,

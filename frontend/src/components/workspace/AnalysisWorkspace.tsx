@@ -253,6 +253,91 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
     }
   };
 
+  // Tab Hydration Loading States
+  const [artifactsLoading, setArtifactsLoading] = useState<boolean>(false);
+  const [forensicsLoading, setForensicsLoading] = useState<boolean>(false);
+  const [correlationLoading, setCorrelationLoading] = useState<boolean>(false);
+
+  const artifactsLoadingRef = useRef<boolean>(false);
+  const forensicsLoadingRef = useRef<boolean>(false);
+  const correlationLoadingRef = useRef<boolean>(false);
+
+  // Tab Loaders (fetch required data only when tab is viewed)
+  const loadIndicatorsData = async (emailId: string) => {
+    if (!emailId || artifactsLoadingRef.current) return;
+    artifactsLoadingRef.current = true;
+    setArtifactsLoading(true);
+    try {
+      const res = await getEmailArtifacts(emailId);
+      setArtifactsData(res);
+    } catch (e: any) {
+      console.warn('Artifacts load notice:', e?.message);
+    } finally {
+      artifactsLoadingRef.current = false;
+      setArtifactsLoading(false);
+    }
+  };
+
+  const loadForensicsData = async (emailId: string) => {
+    if (!emailId || forensicsLoadingRef.current) return;
+    forensicsLoadingRef.current = true;
+    setForensicsLoading(true);
+    try {
+      const [hopsRes, headersRes, structRes, domRes, infraRes] = await Promise.allSettled([
+        getEmailRelayHops(emailId),
+        getEmailHeaders(emailId),
+        getEmailStructure(emailId),
+        getEmailDomainIntelligence(emailId),
+        getEmailInfrastructureIntelligence(emailId),
+      ]);
+      if (hopsRes.status === 'fulfilled') setHopsData(hopsRes.value);
+      if (headersRes.status === 'fulfilled') setHeadersData(headersRes.value);
+      if (structRes.status === 'fulfilled') setStructureData(structRes.value);
+      if (domRes.status === 'fulfilled') setDomainIntelData(domRes.value);
+      if (infraRes.status === 'fulfilled') setInfraIntelData(infraRes.value);
+    } catch (e: any) {
+      console.warn('Forensics load notice:', e?.message);
+    } finally {
+      forensicsLoadingRef.current = false;
+      setForensicsLoading(false);
+    }
+  };
+
+  const loadCorrelationData = async (emailId: string) => {
+    if (!emailId || correlationLoadingRef.current) return;
+    correlationLoadingRef.current = true;
+    setCorrelationLoading(true);
+    try {
+      const [memsRes, corrsRes, simRes, graphRes] = await Promise.allSettled([
+        getEmailCampaignMemberships(emailId),
+        getEmailCorrelations(emailId, 40.0),
+        getSimilarEmails(emailId),
+        getInvestigationGraphForEmail(emailId),
+      ]);
+      if (memsRes.status === 'fulfilled') setMembershipsData(memsRes.value);
+      if (corrsRes.status === 'fulfilled') setCorrelationsData(corrsRes.value);
+      if (simRes.status === 'fulfilled') setSimilarityData(simRes.value);
+      if (graphRes.status === 'fulfilled') setGraphData(graphRes.value);
+    } catch (e: any) {
+      console.warn('Correlations load notice:', e?.message);
+    } finally {
+      correlationLoadingRef.current = false;
+      setCorrelationLoading(false);
+    }
+  };
+
+  // On-demand hydration when activeTab switches
+  useEffect(() => {
+    if (!selectedEmailId || loading) return;
+    if (activeTab === 'indicators' && !artifactsData && !artifactsLoadingRef.current) {
+      loadIndicatorsData(selectedEmailId);
+    } else if (activeTab === 'forensics' && !headersData && !forensicsLoadingRef.current) {
+      loadForensicsData(selectedEmailId);
+    } else if (activeTab === 'correlation' && !correlationsData && !correlationLoadingRef.current) {
+      loadCorrelationData(selectedEmailId);
+    }
+  }, [activeTab, selectedEmailId, loading, artifactsData, headersData, correlationsData]);
+
   const fetchFullInvestigation = async (emailId: string) => {
     if (!emailId) return;
     setLoading(true);
@@ -276,18 +361,30 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
     setInfraIntelData(null);
 
     try {
-      // 1. Instant Fast-Path: Fetch core details and forensic analysis first (15-40ms)
-      const [detailsRes, analysisRes] = await Promise.allSettled([
+      // 1. Instant Fast-Path: Fetch Overview requirements in parallel
+      const [detailsRes, analysisRes, authRes, threatRes] = await Promise.allSettled([
         getEmailDetails(emailId),
         getEmailAnalysis(emailId),
+        getEmailAuthResults(emailId),
+        getEmailThreatIntelligence(emailId),
       ]);
 
-      if (detailsRes.status === 'fulfilled') {
-        setEmailDetails(detailsRes.value);
-      }
-      if (analysisRes.status === 'fulfilled') {
-        setAnalysisData(analysisRes.value);
-      }
+      if (detailsRes.status === 'fulfilled') setEmailDetails(detailsRes.value);
+      if (analysisRes.status === 'fulfilled') setAnalysisData(analysisRes.value);
+      if (authRes.status === 'fulfilled') setAuthData(authRes.value);
+      if (threatRes.status === 'fulfilled') setThreatIntelData(threatRes.value);
+
+      // Fetch DNA profile in background for Overview card
+      setDnaLoading(true);
+      getEmailDNA(emailId)
+        .then((res) => {
+          setDnaData(res);
+          setDnaLoading(false);
+        })
+        .catch((e) => {
+          console.warn('Email DNA background load notice:', e?.message);
+          setDnaLoading(false);
+        });
 
       // Unblock UI immediately so user sees the Overview with zero delay
       setLoading(false);
@@ -297,65 +394,14 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
       setLoading(false);
     }
 
-    // 2. Progressive Hydration: Fetch specialized forensic intelligence concurrently in the background
-    getEmailThreatIntelligence(emailId)
-      .then((res) => setThreatIntelData(res))
-      .catch((e) => console.warn('Threat intel background load notice:', e?.message));
-
-    setDnaLoading(true);
-    getEmailDNA(emailId)
-      .then((res) => {
-        setDnaData(res);
-        setDnaLoading(false);
-      })
-      .catch((e) => {
-        console.warn('Email DNA background load notice:', e?.message);
-        setDnaLoading(false);
-      });
-
-    getEmailArtifacts(emailId)
-      .then((res) => setArtifactsData(res))
-      .catch((e) => console.warn('Artifacts background load notice:', e?.message));
-
-    getEmailAuthResults(emailId)
-      .then((res) => setAuthData(res))
-      .catch((e) => console.warn('Auth results background load notice:', e?.message));
-
-    getEmailRelayHops(emailId)
-      .then((res) => setHopsData(res))
-      .catch((e) => console.warn('Relay hops background load notice:', e?.message));
-
-    getEmailHeaders(emailId)
-      .then((res) => setHeadersData(res))
-      .catch((e) => console.warn('Headers background load notice:', e?.message));
-
-    getEmailStructure(emailId)
-      .then((res) => setStructureData(res))
-      .catch((e) => console.warn('Structure background load notice:', e?.message));
-
-    getSimilarEmails(emailId)
-      .then((res) => setSimilarityData(res))
-      .catch((e) => console.warn('Similarity background load notice:', e?.message));
-
-    getEmailCorrelations(emailId, 40.0)
-      .then((res) => setCorrelationsData(res))
-      .catch((e) => console.warn('Correlations background load notice:', e?.message));
-
-    getEmailCampaignMemberships(emailId)
-      .then((res) => setMembershipsData(res))
-      .catch((e) => console.warn('Campaign memberships background load notice:', e?.message));
-
-    getInvestigationGraphForEmail(emailId)
-      .then((res) => setGraphData(res))
-      .catch((e) => console.warn('Graph background load notice:', e?.message));
-
-    getEmailDomainIntelligence(emailId)
-      .then((res) => setDomainIntelData(res))
-      .catch((e) => console.warn('Domain intel background load notice:', e?.message));
-
-    getEmailInfrastructureIntelligence(emailId)
-      .then((res) => setInfraIntelData(res))
-      .catch((e) => console.warn('Infra intel background load notice:', e?.message));
+    // 2. Hydrate active tab if user is currently on a non-overview tab
+    if (activeTab === 'indicators') {
+      loadIndicatorsData(emailId);
+    } else if (activeTab === 'forensics') {
+      loadForensicsData(emailId);
+    } else if (activeTab === 'correlation') {
+      loadCorrelationData(emailId);
+    }
   };
 
   const handleGenerateDNA = async () => {
@@ -1125,7 +1171,13 @@ ZW5kb2JqCg==
           {/* TAB 2: THREAT INDICATORS (IOCs) */}
           {/* ========================================================================= */}
           {!loading && activeTab === 'indicators' && (
-            <div className="space-y-6">
+            artifactsLoading && !artifactsData ? (
+              <div className="p-8 text-center text-sm text-text-muted rounded-xl bg-workspace-card border border-workspace-border flex items-center justify-center gap-3">
+                <Loader2 className="w-5 h-5 text-brand animate-spin" />
+                Loading threat indicators and extracted IOCs…
+              </div>
+            ) : (
+              <div className="space-y-6">
               {/* Multi-Provider Consensus */}
               <Section className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -1383,13 +1435,20 @@ ZW5kb2JqCg==
                 )}
               </Section>
             </div>
+            )
           )}
 
           {/* ========================================================================= */}
           {/* TAB 3: FORENSICS & INFRASTRUCTURE */}
           {/* ========================================================================= */}
           {!loading && activeTab === 'forensics' && (
-            <div className="space-y-6">
+            forensicsLoading && !headersData && !hopsData ? (
+              <div className="p-8 text-center text-sm text-text-muted rounded-xl bg-workspace-card border border-workspace-border flex items-center justify-center gap-3">
+                <Loader2 className="w-5 h-5 text-brand animate-spin" />
+                Loading forensic headers, relay hops, and infrastructure intelligence…
+              </div>
+            ) : (
+              <div className="space-y-6">
               {/* Email Authentication Results */}
               <Section className="space-y-4">
                 <h3 className="text-sm font-bold text-text-primary">Sender Authentication Suite</h3>
@@ -1625,13 +1684,20 @@ ZW5kb2JqCg==
                 )}
               </Section>
             </div>
+            )
           )}
 
           {/* ========================================================================= */}
           {/* TAB 4: CAMPAIGN CORRELATION & GRAPH */}
           {/* ========================================================================= */}
           {!loading && activeTab === 'correlation' && (
-            <div className="space-y-6">
+            correlationLoading && !correlationsData && !membershipsData ? (
+              <div className="p-8 text-center text-sm text-text-muted rounded-xl bg-workspace-card border border-workspace-border flex items-center justify-center gap-3">
+                <Loader2 className="w-5 h-5 text-brand animate-spin" />
+                Loading campaign correlation, similarity clusters, and investigation graph…
+              </div>
+            ) : (
+              <div className="space-y-6">
               {/* Campaign Memberships */}
               <Section className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -1756,6 +1822,7 @@ ZW5kb2JqCg==
                 </Section>
               )}
             </div>
+            )
           )}
         </div>
       )}

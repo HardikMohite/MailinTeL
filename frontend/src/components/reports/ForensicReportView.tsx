@@ -137,35 +137,47 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
       setLoading(true);
       setError(null);
       setVerificationResult(null); // Reset verification state on entity change
+      setRawHtml(''); // Reset previews to avoid stale memory
+      setRawMarkdown('');
       try {
         if (reportType === 'email') {
+          // Fast-path: Fetch core structured report data (served from Redis/RAM in ~5ms)
           const data = await getEmailReportData(selectedEmailId);
           setReportData(data);
-          const md = await exportEmailReport(selectedEmailId, 'markdown');
-          setRawMarkdown(md);
-          const html = await exportEmailReport(selectedEmailId, 'html');
-          setRawHtml(html);
+          setLoading(false); // Unblock UI immediately!
 
-          // Perform background initial integrity validation
-          try {
-            const ver = await verifyEmailIntegrity(selectedEmailId);
-            setVerificationResult(ver);
-          } catch {
-            // Non-blocking
-          }
+          // Non-blocking background verification check
+          verifyEmailIntegrity(selectedEmailId)
+            .then((ver) => setVerificationResult(ver))
+            .catch(() => {});
         } else {
           const data = await getCampaignReportData(selectedCampaignId);
           setReportData(data);
+          setLoading(false);
         }
       } catch (err: any) {
         setError(err.response?.data?.detail || err.message || 'Failed to load report data');
-      } finally {
         setLoading(false);
       }
     };
 
     fetchReport();
   }, [reportType, selectedEmailId, selectedCampaignId]);
+
+  // Lazy-load formatted HTML and Markdown only when those specific tabs are selected
+  useEffect(() => {
+    if (!selectedEmailId || reportType !== 'email') return;
+
+    if (viewFormat === 'html_preview' && !rawHtml) {
+      exportEmailReport(selectedEmailId, 'html')
+        .then((h) => setRawHtml(h))
+        .catch((e) => console.warn('Could not load HTML preview:', e?.message));
+    } else if (viewFormat === 'markdown' && !rawMarkdown) {
+      exportEmailReport(selectedEmailId, 'markdown')
+        .then((m) => setRawMarkdown(m))
+        .catch((e) => console.warn('Could not load markdown preview:', e?.message));
+    }
+  }, [viewFormat, selectedEmailId, reportType, rawHtml, rawMarkdown]);
 
   const handleVerifyIntegrity = async () => {
     setVerifyingIntegrity(true);
@@ -226,7 +238,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
     }
   };
 
-  const handleDownload = (format: 'html' | 'markdown' | 'json') => {
+  const handleDownload = async (format: 'html' | 'markdown' | 'json') => {
     if (!reportData) return;
     let content = '';
     let mimeType = 'text/plain';
@@ -235,10 +247,28 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
     }`;
 
     if (format === 'html') {
-      content = rawHtml || '<html><body>Report Content</body></html>';
+      if (rawHtml) {
+        content = rawHtml;
+      } else if (selectedEmailId) {
+        try {
+          content = await exportEmailReport(selectedEmailId, 'html');
+          setRawHtml(content);
+        } catch {
+          content = '<html><body>Report Content</body></html>';
+        }
+      }
       mimeType = 'text/html';
     } else if (format === 'markdown') {
-      content = rawMarkdown;
+      if (rawMarkdown) {
+        content = rawMarkdown;
+      } else if (selectedEmailId) {
+        try {
+          content = await exportEmailReport(selectedEmailId, 'markdown');
+          setRawMarkdown(content);
+        } catch {
+          content = '# Report Content';
+        }
+      }
       mimeType = 'text/markdown';
     } else {
       content = JSON.stringify(reportData, null, 2);
