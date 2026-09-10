@@ -1482,6 +1482,38 @@ export const getReportById = async (reportId: string): Promise<ReportItem> => {
   return response.data;
 };
 
+export interface ReportIntegrityVerification {
+  verified: boolean;
+  status: string;
+  entity_type: string;
+  entity_id: string;
+  report_id: string | null;
+  original_evidence_sha256: string;
+  report_artifact_sha256: string | null;
+  size_bytes: number;
+  storage_bucket: string;
+  storage_object_key: string;
+  is_immutable: boolean;
+  custody_events_count: number;
+  custody_chain_intact: boolean;
+  last_custody_action: string | null;
+  verified_at: string;
+  verification_seal: string;
+  compliance_standard: string;
+  evidentiary_disclaimer: string;
+}
+
+export const verifyEmailIntegrity = async (emailId: string): Promise<ReportIntegrityVerification> => {
+  const response = await apiClient.post<ReportIntegrityVerification>(`/reports/verify-email/${emailId}`);
+  return response.data;
+};
+
+export const verifyReportIntegrity = async (reportId: string): Promise<ReportIntegrityVerification> => {
+  const response = await apiClient.post<ReportIntegrityVerification>(`/reports/verify/${reportId}`);
+  return response.data;
+};
+
+
 // ---------------------------------------------------------------------------
 // Users & Access Management (org roster, invite, role changes, deactivation)
 // ---------------------------------------------------------------------------
