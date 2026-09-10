@@ -427,7 +427,10 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         iconAnchor: [17, 17],
       });
 
-      const marker = L.marker(latlng, { icon: customIcon });
+      const isCloudProvider = isCloud || Boolean(
+        (m.provider && (m.provider.toLowerCase().includes('microsoft') || m.provider.toLowerCase().includes('google') || m.provider.toLowerCase().includes('amazon'))) ||
+        (m.asn_org && (m.asn_org.toLowerCase().includes('microsoft') || m.asn_org.toLowerCase().includes('google') || m.asn_org.toLowerCase().includes('amazon')))
+      );
 
       // Interactive Tactical Popup
       const popupContent = `
@@ -436,7 +439,7 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
             <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; background: ${markerColor}22; color: ${markerColor}; border: 1px solid ${markerColor}66; border-radius: 4px; padding: 2px 6px;">
               ${iconSymbol} ${categoryBadge}
             </span>
-            ${isOrigin ? `<span style="font-size: 9px; font-weight: 800; background: #EF444433; color: #F87171; border: 1px solid #EF444466; border-radius: 4px; padding: 1px 4px;">ORIGIN</span>` : isDestination ? `<span style="font-size: 9px; font-weight: 800; background: #10B98133; color: #34D399; border: 1px solid #10B98166; border-radius: 4px; padding: 1px 4px;">GATEWAY</span>` : ''}
+            ${isOrigin ? (isCloudProvider ? `<span style="font-size: 9px; font-weight: 800; background: #F59E0B33; color: #FBBF24; border: 1px solid #F59E0B66; border-radius: 4px; padding: 1px 4px;">CLOUD RELAY</span>` : `<span style="font-size: 9px; font-weight: 800; background: #10B98133; color: #34D399; border: 1px solid #10B98166; border-radius: 4px; padding: 1px 4px;">CLIENT ORIGIN</span>`) : isDestination ? `<span style="font-size: 9px; font-weight: 800; background: #38BDF833; color: #38BDF8; border: 1px solid #38BDF866; border-radius: 4px; padding: 1px 4px;">GATEWAY</span>` : ''}
           </div>
           <div style="font-weight: 700; font-size: 13px; color: #F8FAFC; margin-bottom: 4px;">
             ${m.city_name ? `${m.city_name}, ` : ''}${m.country_name || 'Unknown Location'}
@@ -453,6 +456,7 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         </div>
       `;
 
+      const marker = L.marker(latlng, { icon: customIcon });
       marker.bindPopup(popupContent);
 
       marker.on('click', () => {
@@ -969,41 +973,65 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
                       </div>
 
                       {/* Header Info */}
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="font-bold text-text-primary text-sm font-mono">{selectedMarker.ip_address}</span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          selectedMarker.role === 'ORIGIN_HOP' || selectedMarker.sequence_number === 1
-                            ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                            : 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
-                        }`}>
-                          {selectedMarker.role === 'ORIGIN_HOP' || selectedMarker.sequence_number === 1
-                            ? 'Sender Origin'
-                            : `Hop #${selectedMarker.sequence_number || '1'}`}
-                        </span>
-                      </div>
+                      {(() => {
+                        const isOrigin = selectedMarker.role === 'ORIGIN_HOP' || selectedMarker.sequence_number === 1;
+                        const isCloudRelay = Boolean(
+                          selectedMarker.is_cloud || selectedMarker.is_datacenter ||
+                          (selectedMarker.provider && (selectedMarker.provider.toLowerCase().includes('microsoft') || selectedMarker.provider.toLowerCase().includes('google') || selectedMarker.provider.toLowerCase().includes('amazon'))) ||
+                          (selectedMarker.asn_org && (selectedMarker.asn_org.toLowerCase().includes('microsoft') || selectedMarker.asn_org.toLowerCase().includes('google') || selectedMarker.asn_org.toLowerCase().includes('amazon')))
+                        );
 
-                      {/* Location & Provider */}
-                      <div className="text-xs text-text-secondary space-y-0.5">
-                        <div>
-                          <strong className="text-text-primary">{selectedMarker.city_name ? `${selectedMarker.city_name}, ` : ''}</strong>
-                          {selectedMarker.country_name || 'Unknown Country'}
-                        </div>
-                        {selectedMarker.provider && (
-                          <div className="text-[11px] text-text-secondary font-medium">
-                            Provider: <span className="text-text-primary">{selectedMarker.provider}</span>
-                          </div>
-                        )}
-                        {selectedMarker.asn && (
-                          <div className="text-[11px] text-text-muted font-mono">
-                            ASN: <span className="text-slate-300">{selectedMarker.asn}</span> {selectedMarker.asn_org ? `(${selectedMarker.asn_org})` : ''}
-                          </div>
-                        )}
-                        {selectedMarker.host && (
-                          <div className="text-[11px] text-text-muted truncate font-mono">
-                            Host: {selectedMarker.host}
-                          </div>
-                        )}
-                      </div>
+                        return (
+                          <>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-bold text-text-primary text-sm font-mono">{selectedMarker.ip_address}</span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                isOrigin
+                                  ? isCloudRelay
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                              }`}>
+                                {isOrigin
+                                  ? isCloudRelay
+                                    ? 'First Relay (Cloud Server)'
+                                    : 'Sender Client Device'
+                                  : `Hop #${selectedMarker.sequence_number || '1'}`}
+                              </span>
+                            </div>
+
+                            {/* Location & Provider */}
+                            <div className="text-xs text-text-secondary space-y-0.5">
+                              <div>
+                                <strong className="text-text-primary">{selectedMarker.city_name ? `${selectedMarker.city_name}, ` : ''}</strong>
+                                {selectedMarker.country_name || 'Unknown Country'}
+                              </div>
+                              {selectedMarker.provider && (
+                                <div className="text-[11px] text-text-secondary font-medium">
+                                  Provider: <span className="text-text-primary">{selectedMarker.provider}</span>
+                                </div>
+                              )}
+                              {selectedMarker.asn && (
+                                <div className="text-[11px] text-text-muted font-mono">
+                                  ASN: <span className="text-slate-300">{selectedMarker.asn}</span> {selectedMarker.asn_org ? `(${selectedMarker.asn_org})` : ''}
+                                </div>
+                              )}
+                              {selectedMarker.host && (
+                                <div className="text-[11px] text-text-muted truncate font-mono">
+                                  Host: {selectedMarker.host}
+                                </div>
+                              )}
+                            </div>
+
+                            {isOrigin && isCloudRelay && (
+                              <div className="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200/90 leading-relaxed">
+                                <strong className="text-amber-300 block mb-0.5">ℹ️ Provider Privacy Shield:</strong>
+                                Webmail providers (Microsoft Outlook, Gmail) redact the user's home IP to protect privacy. This observable hop represents the provider's mail server ({selectedMarker.provider || selectedMarker.asn_org || 'Cloud Datacenter'}), not your friend's personal device location.
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
 
                       {/* 4-Pill Privacy Classification Matrix */}
                       <div className="pt-2 border-t border-workspace-border grid grid-cols-2 gap-1.5 text-[10px]">

@@ -40,6 +40,35 @@ async def analyze_and_persist_headers(
     hop_parser = ReceivedHeaderParser()
     parsed_hops = hop_parser.parse_received_headers(received_headers)
 
+    # 1b. Extract explicit client originating IP headers if preserved by the MTA/client
+    from app.parser.header_analyzer import extract_ip_from_text
+    client_ip = None
+    client_hdr_name = None
+    for hdr in ("X-Originating-IP", "X-Sender-IP", "X-Client-IP", "X-Real-IP", "X-Apparently-From"):
+        val = msg.get(hdr)
+        if val:
+            extracted = extract_ip_from_text(str(val))
+            if extracted:
+                client_ip = extracted
+                client_hdr_name = hdr
+                break
+
+    if client_ip:
+        first_hop_ip = parsed_hops[0].source_ip if parsed_hops else None
+        if client_ip != first_hop_ip:
+            for h in parsed_hops:
+                h.sequence_number += 1
+            client_hop = ParsedRelayHop(
+                sequence_number=1,
+                source_host=f"Originating Client Device ({client_hdr_name})",
+                source_ip=client_ip,
+                destination_host=parsed_hops[0].source_host if parsed_hops else None,
+                protocol="Client Submission",
+                reliability="HIGH",
+                raw_header=f"{client_hdr_name}: [{client_ip}]",
+            )
+            parsed_hops.insert(0, client_hop)
+
     # 2. Parse Authentication Results & Signatures
     auth_parser = AuthenticationResultsParser()
     parsed_auth = auth_parser.parse_authentication(msg)

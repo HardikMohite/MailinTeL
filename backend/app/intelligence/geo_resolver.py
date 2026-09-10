@@ -73,16 +73,19 @@ class AsyncGeoIPResolver:
 
     def __init__(self, classifier: Optional[InfrastructureClassifier] = None):
         self.classifier = classifier or InfrastructureClassifier()
+        self._cache: Dict[str, GeoIPResult] = {}
 
     async def resolve_ip_geolocation(self, ip_address: str, host: Optional[str] = None) -> GeoIPResult:
         """
         Resolves geolocation coordinates and infrastructure classification for an IPv4/IPv6 address.
         """
         clean_ip = ip_address.strip()
+        if clean_ip in self._cache:
+            return self._cache[clean_ip]
         try:
             ip_obj = ipaddress.ip_address(clean_ip)
             if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved:
-                return GeoIPResult(
+                res = GeoIPResult(
                     ip_address=clean_ip,
                     is_private=True,
                     country_code="PRIVATE",
@@ -105,6 +108,8 @@ class AsyncGeoIPResolver:
                     asn_org=None,
                     classification_badges=["INTERNAL_RFC1918"],
                 )
+                self._cache[clean_ip] = res
+                return res
 
             # Look up ASN metadata
             mm_asn = maxmind_client.lookup_asn(clean_ip) or {}
@@ -182,7 +187,47 @@ class AsyncGeoIPResolver:
                         classification_badges=infra_summary["classification_badges"],
                     )
 
-            # Deterministic hash-based regional distribution for unlisted public IPs
+            # 3. Live High-Accuracy IP Geolocation Lookup (for any real-world IP not covered by local DB)
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=2.5) as client:
+                    resp = await client.get(
+                        f"http://ip-api.com/json/{clean_ip}?fields=status,country,countryCode,region,regionName,city,lat,lon,isp,org,as,query"
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("status") == "success" and data.get("lat") is not None:
+                            resolved_asn = data.get("as") or infra_summary.get("asn") or mm_asn.get("asn")
+                            resolved_org = data.get("org") or data.get("isp") or infra_summary.get("asn_org") or mm_asn.get("asn_org")
+                            res = GeoIPResult(
+                                ip_address=clean_ip,
+                                is_private=False,
+                                country_code=data.get("countryCode") or "UNKNOWN",
+                                country_name=data.get("country") or "Unknown Country",
+                                region_name=data.get("regionName") or data.get("region"),
+                                city_name=data.get("city"),
+                                latitude=float(data["lat"]),
+                                longitude=float(data["lon"]),
+                                accuracy_radius_km=25,
+                                source="LIVE_GEOIP_REGISTRY",
+                                confidence=95.0,
+                                connection_type=infra_summary["connection_type"],
+                                provider=data.get("isp") or infra_summary["provider"],
+                                is_tor=infra_summary["is_tor"],
+                                is_vpn=infra_summary["is_vpn"],
+                                is_datacenter=infra_summary["is_datacenter"],
+                                is_cloud=infra_summary["is_cloud"],
+                                is_personal_mail=infra_summary["is_personal_mail"],
+                                asn=resolved_asn,
+                                asn_org=resolved_org,
+                                classification_badges=infra_summary["classification_badges"],
+                            )
+                            self._cache[clean_ip] = res
+                            return res
+            except Exception as live_err:
+                logger.debug("Live GeoIP lookup failed or timed out for %s: %s", clean_ip, live_err)
+
+            # 4. Deterministic hash-based regional distribution for unlisted public IPs
             h = hash(clean_ip) % 4
             defaults = [
                 ("US", "United States", "Virginia", "Ashburn", 39.0438, -77.4874),
