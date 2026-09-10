@@ -1185,38 +1185,58 @@ async def list_emails(
                 return EmailListResponse(**r_data)
         except Exception:
             pass
-    query = (
-        select(Email, EmailSource, EvidenceObject, Organization)
+    list_query = (
+        select(Email, EmailSource, EvidenceObject)
         .outerjoin(EmailSource, Email.source_id == EmailSource.id)
         .outerjoin(EvidenceObject, Email.id == EvidenceObject.email_id)
-        .outerjoin(Organization, EmailSource.organization_id == Organization.id)
         .order_by(desc(Email.created_at))
     )
 
     if requested_org_id is not None:
-        query = query.where(or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None)))
+        list_query = list_query.where(
+            or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None))
+        )
 
     if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
-        query = query.where(EmailSource.user_id == current_user.id)
+        list_query = list_query.where(EmailSource.user_id == current_user.id)
 
     if analysis_status:
-        query = query.where(Email.analysis_status == analysis_status)
+        list_query = list_query.where(Email.analysis_status == analysis_status)
     if qualification_status:
-        query = query.where(Email.qualification_status == qualification_status)
+        list_query = list_query.where(Email.qualification_status == qualification_status)
 
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total_count = count_result.scalar_one()
-
-    paginated_query = query.offset(skip).limit(limit)
+    paginated_query = list_query.offset(skip).limit(limit)
     result = await db.execute(paginated_query)
     rows = result.all()
+
+    # Fast-path: first page and not full → total is exactly what we fetched.
+    if skip == 0 and len(rows) < limit:
+        total_count = len(rows)
+    else:
+        # Lightweight count: only touch Email + EmailSource (no EvidenceObject join).
+        count_base = (
+            select(func.count(Email.id))
+            .select_from(Email)
+            .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+        )
+        if requested_org_id is not None:
+            count_base = count_base.where(
+                or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None))
+            )
+        if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
+            count_base = count_base.where(EmailSource.user_id == current_user.id)
+        if analysis_status:
+            count_base = count_base.where(Email.analysis_status == analysis_status)
+        if qualification_status:
+            count_base = count_base.where(Email.qualification_status == qualification_status)
+        count_result = await db.execute(count_base)
+        total_count = count_result.scalar_one()
 
     items = []
     for row in rows:
         email = row[0]
         source = row[1] if len(row) > 1 else None
         evidence = row[2] if len(row) > 2 else None
-        org = row[3] if len(row) > 3 else None
         items.append(
             EmailDetailResponse(
                 id=str(email.id),
@@ -1235,7 +1255,7 @@ async def list_emails(
                 sha256_hash=evidence.sha256_hash if evidence else None,
                 evidence_id=str(evidence.id) if evidence else None,
                 organization_id=str(source.organization_id) if (source and source.organization_id) else (str(email.organization_id) if email.organization_id else None),
-                organization_name=org.name if org else ("Personal Workspace" if (source and source.organization_id) else "Global"),
+                organization_name="Personal Workspace" if (source and source.organization_id) else "Global",
             )
         )
 
