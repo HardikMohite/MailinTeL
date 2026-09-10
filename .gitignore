@@ -21,6 +21,13 @@ parts/
 sdist/
 var/
 wheels/
+# Playwright
+test-results/
+playwright-report/
+
+# Report generated outputs
+reports_output/
+backend/reports_output/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
@@ -47,6 +54,15 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+tests_local/
+local_tests/
+backend/tests_local/
+backend/local_tests/
+frontend/src/tests_local/
+frontend/src/local_tests/
+*.local.test.*
+*.devil.test.*
+
 
 # Node & Frontend
 node_modules/

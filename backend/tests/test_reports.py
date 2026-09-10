@@ -13,6 +13,8 @@ from app.models.evidence import EvidenceObject
 from app.models.analysis import EmailAnalysis, AnalysisFinding
 from app.models.reports import Report
 from app.services.report_service import ReportService, ATTRIBUTION_DISCLAIMER
+from app.services.pdf_report_service import PDFReportService
+import pymupdf
 from tests.auth_helpers import TEST_USER
 
 client = TestClient(app)
@@ -326,3 +328,166 @@ def test_api_export_email_report_markdown():
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/markdown")
         assert "MailIntel Forensic Intelligence Report" in resp.text
+
+
+def test_render_pdf_report_strictly_two_pages():
+    report_data = {
+        "report_id": str(uuid.uuid4()),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "report_type": "FORENSIC_SUMMARY",
+        "email_id": str(uuid.uuid4()),
+        "email_metadata": {
+            "subject": "PDF Test: Invoice Verification",
+            "from_address": "finance@test-domain.com",
+            "to_addresses": ["accounting@target.com"],
+            "sha256_hash": "c" * 64,
+            "file_size_bytes": 14200,
+        },
+        "explainable_scores": {
+            "threat_classification": "SUSPICIOUS",
+            "threat_risk_score": 62.0,
+            "evidence_confidence_score": 88.0,
+            "summary": "Suspicious newly registered sending domain with SPF softfail.",
+            "likelihoods": {
+                "compromised_account": "LOW",
+                "spoofed_domain": "HIGH",
+                "anonymized_infrastructure": "UNLIKELY",
+                "malicious_environment": "MEDIUM",
+            },
+            "findings": [
+                {
+                    "severity": "HIGH",
+                    "finding_type": "DOMAIN_AGE",
+                    "title": "Newly Registered Domain",
+                    "description": "Domain registered 4 days ago.",
+                }
+            ],
+        },
+        "custody_and_integrity": {"integrity": {"bucket": "mailintel-evidence", "immutable": True}},
+        "authentication_and_headers": {"spf_result": "SOFTFAIL", "dkim_result": "PASS", "dmarc_result": "FAIL"},
+        "threat_intelligence": {"threat_indicators": [], "urls": []},
+        "geo_intelligence": {"locations": []},
+        "limitations_and_disclaimer": {
+            "disclaimer": ATTRIBUTION_DISCLAIMER,
+            "uncertainty_notes": ["Routing hops may be forged."],
+        },
+    }
+
+    pdf_bytes = PDFReportService.render_pdf_report(report_data)
+    assert len(pdf_bytes) > 1000
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    assert doc.page_count == 2, f"Expected strictly 2 pages, got {doc.page_count}"
+    page1_text = doc[0].get_text()
+    assert "SENDER DOMAIN & REGISTRATION INTELLIGENCE" in page1_text
+    page2_text = doc[1].get_text()
+    assert "DETAILED ANALYSIS FINDINGS & SECURITY CHECKS" in page2_text
+
+
+def test_render_pdf_report_domain_intelligence_and_benign_wording():
+    """Verify that BENIGN classification renders as CLEAN / SAFE and domain intel is rendered."""
+    report_data = {
+        "report_id": str(uuid.uuid4()),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "report_type": "FORENSIC_SUMMARY",
+        "email_id": str(uuid.uuid4()),
+        "email_metadata": {
+            "subject": "Benign Newsletter",
+            "from_address": "support@brevosend.com",
+            "from_name": "Brevo Support",
+            "to_addresses": ["user@example.com"],
+            "sha256_hash": "a" * 64,
+        },
+        "explainable_scores": {
+            "threat_classification": "BENIGN",
+            "threat_risk_score": 3.0,
+            "evidence_confidence_score": 95.0,
+            "summary": "All checks passed cleanly.",
+            "likelihoods": {
+                "compromised_account": "UNLIKELY",
+                "spoofed_domain": "UNLIKELY",
+                "anonymized_infrastructure": "UNLIKELY",
+                "malicious_environment": "UNLIKELY",
+            },
+            "findings": [
+                {
+                    "severity": "INFO",
+                    "finding_type": "AUTH_AUTHENTICATION_PASSED",
+                    "title": "Authentication Passed",
+                    "description": "SPF, DKIM, and DMARC aligned.",
+                }
+            ],
+        },
+        "domain_intelligence": {
+            "domain": "brevosend.com",
+            "root_domain": "brevosend.com",
+            "registrar": "OVH sas",
+            "registered_at": "2024-02-26T17:14:14+00:00",
+            "expires_at": "2027-02-26T17:14:14+00:00",
+            "domain_age_days": 926,
+            "domain_age_str": "926 days (~2y 6m)",
+            "mx_servers": ["dmarc.brevo.com"],
+            "nameservers": ["josh.ns.cloudflare.com"],
+            "domain_type": "Commercial ESP Relay",
+            "is_punycode": False,
+        },
+        "custody_and_integrity": {"integrity": {"bucket": "mailintel-evidence"}},
+        "authentication_and_headers": {"spf_result": "PASS", "dkim_result": "PASS", "dmarc_result": "PASS"},
+        "threat_intelligence": {
+            "urls": [{"normalized_url": "https://example.com/link", "context": "BODY"}],
+            "threat_indicators": [
+                {"indicator_type": "DOMAIN", "value": "brevosend.com", "source": "Threat Intelligence Engine", "verdict": "BENIGN"}
+            ]
+        },
+        "geo_intelligence": {"locations": []},
+        "limitations_and_disclaimer": {"disclaimer": ATTRIBUTION_DISCLAIMER, "uncertainty_notes": []},
+    }
+
+    pdf_bytes = PDFReportService.render_pdf_report(report_data)
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    assert doc.page_count == 2
+    p1 = doc[0].get_text()
+    assert "CLEAN / SAFE" in p1
+    assert "brevosend.com" in p1
+    assert "OVH sas" in p1
+    p2 = doc[1].get_text()
+    assert "SAFE / PASSED" in p2
+    assert "Email Authentication" in p2
+    assert "FOUND IN EMAIL" in p2
+
+
+def test_export_pdf_report_endpoint():
+    email_id = uuid.uuid4()
+    mock_report_data = {
+        "report_id": str(uuid.uuid4()),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "report_type": "FORENSIC_SUMMARY",
+        "email_id": str(email_id),
+        "email_metadata": {"subject": "PDF Export Test", "sha256_hash": "d" * 64},
+        "explainable_scores": {"threat_classification": "BENIGN", "threat_risk_score": 10.0, "evidence_confidence_score": 90.0},
+        "custody_and_integrity": {"integrity": {}},
+        "authentication_and_headers": {},
+        "threat_intelligence": {},
+        "geo_intelligence": {},
+        "limitations_and_disclaimer": {"disclaimer": ATTRIBUTION_DISCLAIMER, "uncertainty_notes": []},
+    }
+
+    with patch(
+        "app.services.report_service.ReportService.build_email_report_data",
+        new=AsyncMock(return_value=mock_report_data),
+    ), patch(
+        "sqlalchemy.ext.asyncio.AsyncSession.execute"
+    ) as mock_exec:
+        mock_res = MagicMock()
+        mock_res.first.return_value = (
+            Email(id=email_id, source_id=uuid.uuid4(), subject="PDF Export Test"),
+            EmailSource(id=uuid.uuid4(), organization_id=TEST_USER.organization_id),
+        )
+        mock_exec.return_value = mock_res
+
+        app.dependency_overrides[get_current_user] = lambda: TEST_USER
+        resp = client.get(f"/api/v1/reports/email/{email_id}/export?format=pdf")
+        app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert f"MailIntel_Forensic_Report_{str(email_id)[:8]}.pdf" in resp.headers["content-disposition"]
+

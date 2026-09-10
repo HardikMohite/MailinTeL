@@ -904,12 +904,14 @@ export const listEmails = async (
   limit = 50,
   analysisStatus?: string,
   qualificationStatus?: string,
-  organizationId?: string
+  organizationId?: string,
+  threatOnly?: boolean
 ): Promise<EmailListResponse> => {
   const params: Record<string, unknown> = { skip, limit };
   if (analysisStatus) params.analysis_status = analysisStatus;
   if (qualificationStatus) params.qualification_status = qualificationStatus;
   if (organizationId) params.organization_id = organizationId;
+  if (threatOnly !== undefined) params.threat_only = threatOnly;
   const response = await apiClient.get<EmailListResponse>('/emails', { params });
   return response.data;
 };
@@ -1405,15 +1407,24 @@ export const getEmailReportData = async (emailId: string): Promise<Record<string
   return response.data;
 };
 
-export const exportEmailReport = async (
+export function exportEmailReport(
   emailId: string,
-  format: 'html' | 'markdown' | 'json' = 'html'
-): Promise<string> => {
-  const response = await apiClient.get<string>(`/reports/email/${emailId}/export?format=${format}`, {
-    responseType: 'text',
+  format: 'pdf'
+): Promise<Blob>;
+export function exportEmailReport(
+  emailId: string,
+  format?: 'html' | 'markdown' | 'json'
+): Promise<string>;
+export async function exportEmailReport(
+  emailId: string,
+  format: 'html' | 'markdown' | 'json' | 'pdf' = 'html'
+): Promise<Blob | string> {
+  const isBinary = format === 'pdf';
+  const response = await apiClient.get(`/reports/email/${emailId}/export?format=${format}`, {
+    responseType: isBinary ? 'blob' : 'text',
   });
   return response.data;
-};
+}
 
 export const generateCampaignReport = async (
   campaignId: string,

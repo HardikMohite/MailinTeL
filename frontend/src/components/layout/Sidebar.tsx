@@ -70,6 +70,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
         {
           title: 'Admin Command',
           items: [
+            { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
             { id: 'dashboard', label: 'System Dashboard', icon: LayoutDashboard },
           ],
         },
@@ -93,7 +94,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
         {
           title: 'Governance & Access',
           items: [
-            { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],

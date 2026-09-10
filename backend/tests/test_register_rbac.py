@@ -4,10 +4,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.identity import Role
 
 client = TestClient(app)
+
 
 
 def _make_result(*, scalar_one_or_none=None):
@@ -17,9 +19,10 @@ def _make_result(*, scalar_one_or_none=None):
 
 
 @pytest.mark.asyncio
-async def test_self_registration_always_assigns_user_role():
+async def test_self_registration_always_assigns_user_role(monkeypatch):
     """Verifies that self-registration strictly assigns standard USER role,
     even if an organization name is supplied."""
+    monkeypatch.setattr(settings, "ALLOW_SELF_SIGNUP", True)
     user_role = Role(id=uuid.uuid4(), code="USER", name="User")
 
     db = AsyncMock()
@@ -52,8 +55,9 @@ async def test_self_registration_always_assigns_user_role():
 
 
 @pytest.mark.asyncio
-async def test_self_registration_personal_workspace_assigns_user_role():
+async def test_self_registration_personal_workspace_assigns_user_role(monkeypatch):
     """Verifies that self-registration without organization name assigns USER role in Personal Workspace."""
+    monkeypatch.setattr(settings, "ALLOW_SELF_SIGNUP", True)
     user_role = Role(id=uuid.uuid4(), code="USER", name="User")
 
     db = AsyncMock()
@@ -80,3 +84,4 @@ async def test_self_registration_personal_workspace_assigns_user_role():
     data = resp.json()
     assert data["user"]["role"] == "USER"
     assert data["user"]["organization_name"] == "Personal Workspace"
+
