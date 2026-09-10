@@ -1031,6 +1031,7 @@ async def list_emails(
     analysis_status: Optional[str] = Query(default=None, description="Filter by analysis status"),
     qualification_status: Optional[str] = Query(default=None, description="Filter by qualification status"),
     organization_id: Optional[uuid.UUID] = Query(default=None, description="Optional organization filter for cross-org roles"),
+    threat_only: bool = Query(default=False, description="Filter to only threat/phishing emails (excludes NORMAL, SAFE, BENIGN)"),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> EmailListResponse:
@@ -1063,6 +1064,8 @@ async def list_emails(
         query = query.where(Email.analysis_status == analysis_status)
     if qualification_status:
         query = query.where(Email.qualification_status == qualification_status)
+    if threat_only:
+        query = query.where(Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]))
 
     count_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total_count = count_result.scalar_one()

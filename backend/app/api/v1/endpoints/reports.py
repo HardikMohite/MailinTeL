@@ -74,7 +74,7 @@ class GenerateReportResponse(BaseModel):
 )
 async def generate_email_report(
     email_id: uuid.UUID,
-    format: str = Query("html", description="Output format: 'html', 'markdown', or 'json'"),
+    format: str = Query("html", description="Output format: 'html', 'markdown', 'json', or 'pdf'"),
     db: AsyncSession = Depends(get_db),
     # MVP-04: generating/preserving a forensic report artifact is an analyst-and-up operation.
     current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
@@ -137,7 +137,7 @@ async def get_email_report_data(
 )
 async def export_email_report(
     email_id: uuid.UUID,
-    format: str = Query("html", description="Output format: 'html', 'markdown', or 'json'"),
+    format: str = Query("html", description="Output format: 'html', 'markdown', 'json', or 'pdf'"),
     db: AsyncSession = Depends(get_db),
     # MVP-04: report export is an analyst-and-up operation.
     current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
@@ -162,6 +162,14 @@ async def export_email_report(
         return Response(
             content=content,
             media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    elif fmt == "pdf":
+        content = ReportService.render_pdf_report(report_data)
+        filename = f"MailIntel_Forensic_Report_{str(email_id)[:8]}.pdf"
+        return Response(
+            content=content,
+            media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     else:
