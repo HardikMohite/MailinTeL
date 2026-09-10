@@ -148,14 +148,20 @@ function computeBridgeEntities(
 
 interface InvestigationGraphViewProps {
   initialEmailId?: string;
+  initialCampaignId?: string;
   onSelectEmail?: (emailId: string) => void;
+  embedded?: boolean;
 }
 
 export const InvestigationGraphView: React.FC<InvestigationGraphViewProps> = ({
   initialEmailId,
+  initialCampaignId,
   onSelectEmail,
+  embedded,
 }) => {
-  const [graphMode, setGraphMode] = useState<GraphMode>(initialEmailId ? 'email' : 'global');
+  const [graphMode, setGraphMode] = useState<GraphMode>(
+    initialCampaignId ? 'campaign' : initialEmailId ? 'email' : 'global'
+  );
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('pipeline');
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
   const [showInspectorInFullscreen, setShowInspectorInFullscreen] = useState<boolean>(true);
@@ -163,7 +169,7 @@ export const InvestigationGraphView: React.FC<InvestigationGraphViewProps> = ({
   const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignListItemResponse[]>([]);
   const [selectedEmailId, setSelectedEmailId] = useState<string>(initialEmailId || '');
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>(initialCampaignId || '');
   const [graphData, setGraphData] = useState<InvestigationGraphResponse | null>(null);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -200,6 +206,15 @@ export const InvestigationGraphView: React.FC<InvestigationGraphViewProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEmailId]);
+
+  useEffect(() => {
+    if (initialCampaignId && initialCampaignId !== selectedCampaignId) {
+      setSelectedCampaignId(initialCampaignId);
+      setGraphMode('campaign');
+      fetchCampaignGraph(initialCampaignId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCampaignId]);
 
   // Keyboard shortcut listener: Esc to exit fullscreen, F to toggle
   useEffect(() => {
@@ -238,9 +253,16 @@ export const InvestigationGraphView: React.FC<InvestigationGraphViewProps> = ({
       setEmails(emailItems);
       setCampaigns(campItems);
       if (!initialEmailId && emailItems.length > 0) setSelectedEmailId(emailItems[0].id);
-      if (campItems.length > 0) setSelectedCampaignId(campItems[0].id);
+      if (!initialCampaignId && campItems.length > 0) setSelectedCampaignId(campItems[0].id);
 
-      if (initialEmailId) {
+      if (initialCampaignId) {
+        setSelectedCampaignId(initialCampaignId);
+        setGraphMode('campaign');
+        const g = await getInvestigationGraphForCampaign(initialCampaignId);
+        applyGraph(g);
+      } else if (initialEmailId) {
+        setSelectedEmailId(initialEmailId);
+        setGraphMode('email');
         const g = await getInvestigationGraphForEmail(initialEmailId);
         applyGraph(g);
       } else {
@@ -1175,10 +1197,10 @@ export const InvestigationGraphView: React.FC<InvestigationGraphViewProps> = ({
           <div className="flex items-center gap-2.5">
             <Network className="w-5 h-5 text-brand" />
             <h1 className="text-lg sm:text-xl font-bold text-text-primary">
-              Investigation Graph {isFullScreen && <span className="text-xs font-normal text-brand ml-2 bg-brand/10 border border-brand/30 px-2 py-0.5 rounded-md">Immersive Fullscreen</span>}
+              {embedded ? 'Campaign Forensics Graph' : 'Investigation Graph'} {isFullScreen && <span className="text-xs font-normal text-brand ml-2 bg-brand/10 border border-brand/30 px-2 py-0.5 rounded-md">Immersive Fullscreen</span>}
             </h1>
           </div>
-          {!isFullScreen && (
+          {!isFullScreen && !embedded && (
             <p className="hidden md:block text-xs text-text-muted">
               Multi-hop relational intelligence across transmission hops, message payloads, and campaign infrastructure.
             </p>

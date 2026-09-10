@@ -720,11 +720,22 @@ export interface EmailCorrelationsResponse {
   correlations: CorrelatedEmailItem[];
 }
 
+export interface ReportingUserSummary {
+  user_id: string;
+  username: string;
+  email: string;
+  emails_count: number;
+}
+
 export interface CampaignMembershipItem {
   id: string;
   email_id: string;
   email_subject?: string | null;
   email_sender?: string | null;
+  submitted_by_id?: string | null;
+  submitted_by_name?: string | null;
+  submitted_by_email?: string | null;
+  sent_at?: string | null;
   membership_confidence: number;
   membership_status: string;
   evidence_summary: Record<string, unknown>;
@@ -747,6 +758,28 @@ export interface CampaignEventItem {
   metadata: Record<string, unknown>;
 }
 
+export interface TargetedUserEmailItem {
+  id: string;
+  subject?: string | null;
+  sender_address?: string | null;
+  sent_at?: string | null;
+  qualification_status?: string | null;
+  analysis_status?: string | null;
+  submitted_by_id?: string | null;
+  submitted_by_name?: string | null;
+  submitted_by_email?: string | null;
+}
+
+export interface TargetedUserSummary {
+  recipient_address: string;
+  display_name?: string | null;
+  is_internal_account?: boolean;
+  emails_count: number;
+  first_targeted_at?: string | null;
+  last_targeted_at?: string | null;
+  emails: TargetedUserEmailItem[];
+}
+
 export interface CampaignDetailResponse {
   id: string;
   campaign_name?: string | null;
@@ -758,6 +791,8 @@ export interface CampaignDetailResponse {
   total_members: number;
   total_evidence_links: number;
   memberships: CampaignMembershipItem[];
+  targeted_users?: TargetedUserSummary[];
+  reporting_users?: ReportingUserSummary[];
   evidence: CampaignEvidenceItem[];
   events: CampaignEventItem[];
 }
@@ -1159,9 +1194,12 @@ export const getEmailCampaignMemberships = async (emailId: string): Promise<Emai
   return response.data;
 };
 
-export const autoClusterCampaigns = async (minScore = 60.0): Promise<AutoClusterResponse> => {
+export const autoClusterCampaigns = async (
+  minScore = 60.0,
+  minTargets = 2
+): Promise<AutoClusterResponse> => {
   const response = await apiClient.post<AutoClusterResponse>(
-    `/campaigns/auto-cluster?min_score=${minScore}`
+    `/campaigns/auto-cluster?min_score=${minScore}&min_targets=${minTargets}`
   );
   return response.data;
 };

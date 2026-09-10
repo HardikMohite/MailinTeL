@@ -171,10 +171,16 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
       setEmails(emailList);
       setCampaigns(campList);
 
-      const targetEmailId = initialEmailId || (emailList.length > 0 ? emailList[0].id : '');
-      if (targetEmailId) {
-        setSelectedEmailId(targetEmailId);
-        fetchEmailGeo(targetEmailId);
+      if (initialCampaignId) {
+        setSelectedCampaignId(initialCampaignId);
+        setViewMode('campaign');
+        fetchCampaignGeo(initialCampaignId);
+      } else {
+        const targetEmailId = initialEmailId || (emailList.length > 0 ? emailList[0].id : '');
+        if (targetEmailId) {
+          setSelectedEmailId(targetEmailId);
+          fetchEmailGeo(targetEmailId);
+        }
       }
     } catch (err) {
       console.error('Failed to load geo context:', err);
@@ -188,6 +194,14 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
       fetchEmailGeo(initialEmailId);
     }
   }, [initialEmailId]);
+
+  useEffect(() => {
+    if (initialCampaignId && initialCampaignId !== selectedCampaignId) {
+      setSelectedCampaignId(initialCampaignId);
+      setViewMode('campaign');
+      fetchCampaignGeo(initialCampaignId);
+    }
+  }, [initialCampaignId]);
 
   const fetchEmailGeo = async (emailId: string) => {
     if (!emailId) return;
