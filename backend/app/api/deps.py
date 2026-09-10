@@ -274,17 +274,15 @@ async def get_authorized_campaign(
     if not campaign:
         raise not_found
 
-    if campaign.organization_id is None or (
-        current_user.role_code not in CROSS_ORG_ROLES
-        and campaign.organization_id != current_user.organization_id
-    ):
-        raise not_found
+    if current_user.role_code not in CROSS_ORG_ROLES:
+        if campaign.organization_id is None or campaign.organization_id != current_user.organization_id:
+            raise not_found
 
     # SCOPING: a plain USER account may only reach a campaign if it
     # contains at least one email that user personally uploaded ("their
     # campaigns"). Analyst/admin roles (ANALYST_ROLES) see every campaign
     # in the organization, including the full cross-email correlation.
-    if current_user.role_code not in ANALYST_ROLES:
+    if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
         owns_stmt = (
             select(CampaignMembership.id)
             .join(Email, Email.id == CampaignMembership.email_id)
