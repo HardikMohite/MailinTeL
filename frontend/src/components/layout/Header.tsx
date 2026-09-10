@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Search, Bell, RefreshCw, Circle, ChevronDown, LogOut } from 'lucide-react';
+import { Search, Bell, RefreshCw, Circle, ChevronDown, LogOut, Settings } from 'lucide-react';
 import { HealthResponse } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { OrganizationSwitcher } from './OrganizationSwitcher';
@@ -11,6 +11,7 @@ interface HeaderProps {
   title?: string;
   breadcrumb?: string[];
   onBreadcrumbClick?: (crumb: string) => void;
+  onNavigateToSettings?: () => void;
 }
 
 const ServiceDot: React.FC<{ ok?: boolean }> = ({ ok }) => (
@@ -26,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   title = 'Dashboard',
   breadcrumb = ['MailinteL'],
   onBreadcrumbClick,
+  onNavigateToSettings,
 }) => {
   return (
     <header className="h-16 bg-workspace-card border-b border-workspace-border px-6 flex items-center justify-between sticky top-0 z-30 shrink-0">
@@ -85,7 +87,7 @@ export const Header: React.FC<HeaderProps> = ({
           <Bell className="w-[18px] h-[18px]" />
         </button>
 
-        <UserMenu />
+        <UserMenu onNavigateToSettings={onNavigateToSettings} />
       </div>
     </header>
   );
@@ -98,7 +100,24 @@ function getInitials(label: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-const UserMenu: React.FC = () => {
+const formatRoleLabel = (role?: string): string => {
+  switch (role) {
+    case 'SYSTEM_ADMIN':
+      return 'System Administrator';
+    case 'INSTITUTION_ADMIN':
+      return 'Institution Administrator';
+    case 'CYBER_CELL_INVESTIGATOR':
+      return 'Cyber Cell Investigator';
+    case 'SECURITY_ANALYST':
+      return 'Security Analyst';
+    case 'ANALYST':
+      return 'Forensic Analyst';
+    default:
+      return 'Standard User';
+  }
+};
+
+const UserMenu: React.FC<{ onNavigateToSettings?: () => void }> = ({ onNavigateToSettings }) => {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -138,22 +157,46 @@ const UserMenu: React.FC = () => {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-56 bg-workspace-card border border-workspace-border rounded-xl shadow-lg py-1.5 z-40">
-          <div className="px-3.5 py-2 border-b border-workspace-border">
-            <div className="text-[13px] font-semibold text-text-primary truncate">{displayName}</div>
-            <div className="text-[12px] text-text-muted truncate">{user.email}</div>
+        <div className="absolute right-0 mt-2 w-64 bg-workspace-card border border-workspace-border rounded-xl shadow-lg py-1.5 z-40">
+          <div className="px-3.5 py-2.5 border-b border-workspace-border">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[13px] font-semibold text-text-primary truncate">{displayName}</div>
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-brand-soft text-brand border border-brand/20 shrink-0">
+                {formatRoleLabel(user.role)}
+              </span>
+            </div>
+            <div className="text-[12px] text-text-muted truncate mt-0.5">{user.email}</div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              logout();
-            }}
-            className="w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-text-secondary hover:bg-workspace transition-colors"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Log out
-          </button>
+
+          <div className="py-1">
+            {onNavigateToSettings && (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onNavigateToSettings();
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[13px] text-text-secondary hover:bg-workspace hover:text-text-primary transition-colors"
+              >
+                <Settings className="w-4 h-4 text-brand" />
+                Account Settings
+              </button>
+            )}
+          </div>
+
+          <div className="border-t border-workspace-border pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                logout();
+              }}
+              className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[13px] text-rose-600 hover:bg-rose-50/50 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              Log out
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -47,12 +47,7 @@ class InvestigationGraphResponse(BaseModel):
 async def get_email_investigation_graph(
     email_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    # SCOPING: the cross-email/cross-campaign correlation graph ("interconnection
-    # of mails") is restricted to ANALYST_ROLES (SECURITY_ANALYST,
-    # CYBER_CELL_INVESTIGATOR, INSTITUTION_ADMIN, SYSTEM_ADMIN). A plain USER
-    # account can see its own emails/campaigns individually but not how they
-    # interlink platform-wide.
-    current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Constructs an interactive investigation graph centered on an email, traversing its
@@ -73,7 +68,7 @@ async def get_email_investigation_graph(
 async def get_campaign_investigation_graph(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Constructs the complete investigation graph of all emails, artifacts, infrastructure, and
@@ -95,7 +90,7 @@ async def get_global_investigation_graph(
     limit: int = Query(30, ge=5, le=100, description="Max recent emails to include"),
     organization_id: Optional[uuid.UUID] = Query(None, description="Optional organization filter for cross-org roles"),
     session: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Constructs an investigation graph connecting the caller's organization's recent emails

@@ -204,7 +204,7 @@ async def get_global_geo_infrastructure(
     limit: int = Query(50, ge=5, le=200, description="Max recent emails to scan"),
     organization_id: Optional[uuid.UUID] = Query(None, description="Optional organization filter for cross-org roles"),
     session: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(require_organization_or_cross_org),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Produces infrastructure markers and geographic distributions.

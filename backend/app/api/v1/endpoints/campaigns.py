@@ -186,17 +186,12 @@ async def list_campaigns(
     limit: int = Query(50, ge=1, le=100),
     organization_id: Optional[uuid.UUID] = Query(None, description="Optional organization filter for cross-org roles"),
     session: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(require_organization_or_cross_org),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Lists campaigns belonging to the caller's organization, with member counts and activity timelines.
-
-    SCOPING: plain USER accounts only see campaigns that contain at least
-    one email they personally uploaded ("my campaigns"). Analyst/admin
-    roles (ANALYST_ROLES, which includes INSTITUTION_ADMIN/SYSTEM_ADMIN)
-    see every campaign in the organization.
+    Permits all RBAC roles in the organization to view threat campaign intelligence and correlated map infrastructure.
     """
-    owner_user_id = None if current_user.role_code in ANALYST_ROLES or current_user.role_code in CROSS_ORG_ROLES else current_user.id
     requested_org_id = organization_id if current_user.role_code in CROSS_ORG_ROLES else current_user.organization_id
     items = await default_campaign_service.list_campaigns(
         session=session,
@@ -204,7 +199,7 @@ async def list_campaigns(
         skip=skip,
         limit=limit,
         organization_id=requested_org_id,
-        owner_user_id=owner_user_id,
+        owner_user_id=None,
     )
     return [CampaignListItemResponse(**item) for item in items]
 

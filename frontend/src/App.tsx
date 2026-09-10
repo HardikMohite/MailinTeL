@@ -142,6 +142,7 @@ export const App: React.FC = () => {
           title={isKnownTab ? TAB_META[activeTab].title : 'Not Found'}
           breadcrumb={isKnownTab ? TAB_META[activeTab].breadcrumb : ['MailinteL']}
           onBreadcrumbClick={handleBreadcrumbClick}
+          onNavigateToSettings={() => setActiveTab('settings')}
         />
 
         <main className="flex-1 p-8 overflow-y-auto space-y-6">

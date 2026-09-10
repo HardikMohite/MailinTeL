@@ -17,14 +17,6 @@ import {
 import { BrandLogo } from '../common/BrandLogo';
 import { useAuth } from '../../context/AuthContext';
 
-// Roles that keep organization-wide visibility on the backend (see
-// app.api.deps.ANALYST_ROLES): SECURITY_ANALYST, CYBER_CELL_INVESTIGATOR,
-// INSTITUTION_ADMIN, SYSTEM_ADMIN. A plain "USER" account is scoped down to
-// its own uploads/campaigns and gets a 403 from the correlation graph and
-// the team roster — those nav items are hidden for that role so the UI
-// doesn't dangle links that always error out.
-const ANALYST_AND_UP_ROLES = ['SECURITY_ANALYST', 'CYBER_CELL_INVESTIGATOR', 'INSTITUTION_ADMIN', 'SYSTEM_ADMIN'];
-
 export type NavTab =
   | 'dashboard'
   | 'analyze'
@@ -36,8 +28,8 @@ export type NavTab =
   | 'evidence'
   | 'reports'
   | 'team'
-  | 'settings'
-  | 'platform-admin';
+  | 'platform-admin'
+  | 'settings';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -56,8 +48,7 @@ interface NavSection {
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   const { user, isAdmin, isCrossOrg } = useAuth();
-  const isAnalystAndUp = !!user?.role && ANALYST_AND_UP_ROLES.includes(user.role);
-  const canManageTeam = isAdmin() && !isCrossOrg() || user?.role === 'SYSTEM_ADMIN';
+  const canManageTeam = (isAdmin() && !isCrossOrg()) || user?.role === 'SYSTEM_ADMIN';
   // Cross-org /platform/* administration (org creation, cross-org
   // invite/role-change/deactivate, audit log) is SYSTEM_ADMIN only — a
   // narrower gate than isCrossOrg() alone, which also covers
@@ -65,69 +56,44 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   // than re-deriving cross-org membership here.
   const canAccessPlatformAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
 
-  const sections: NavSection[] = canAccessPlatformAdmin
-    ? [
-        {
-          title: 'Admin Command',
-          items: [
-            { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
-            { id: 'dashboard', label: 'System Dashboard', icon: LayoutDashboard },
-          ],
-        },
-        {
-          title: 'Investigation Operations',
-          items: [
-            { id: 'analyze', label: 'Email Investigation', icon: UploadCloud },
-            { id: 'history', label: 'Analysis History', icon: History },
-            { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
-            { id: 'reports', label: 'Forensic Reports', icon: FileText },
-          ],
-        },
-        {
-          title: 'Threat Intelligence',
-          items: [
-            { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
-            { id: 'campaigns', label: 'Campaign Clusters', icon: Flag },
-            { id: 'graph' as const, label: 'Investigation Graph', icon: Network },
-            { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
-          ],
-        },
-        {
-          title: 'Governance & Access',
-          items: [
-            ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
-            { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
-          ],
-        },
-      ]
-    : [
-        {
-          title: 'Investigation Operations',
-          items: [
-            { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-            { id: 'analyze', label: 'Email Investigation', icon: UploadCloud },
-            { id: 'history', label: 'Analysis History', icon: History },
-          ],
-        },
-        {
-          title: 'Threat Intelligence',
-          items: [
-            { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
-            { id: 'campaigns', label: 'Campaign Clusters', icon: Flag },
-            ...(isAnalystAndUp ? [{ id: 'graph' as const, label: 'Investigation Graph', icon: Network }] : []),
-            { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
-          ],
-        },
-        {
-          title: 'Forensic Management',
-          items: [
-            { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
-            { id: 'reports', label: 'Forensic Reports', icon: FileText },
-            ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
-            { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
-          ],
-        },
-      ];
+  const sections: NavSection[] = [
+    ...(canAccessPlatformAdmin
+      ? [
+          {
+            title: 'Admin Command',
+            items: [
+              { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
+            ],
+          },
+        ]
+      : []),
+    {
+      title: 'Investigation Operations',
+      items: [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'analyze', label: 'Email Investigation', icon: UploadCloud },
+        { id: 'history', label: 'Analysis History', icon: History },
+      ],
+    },
+    {
+      title: 'Threat Intelligence',
+      items: [
+        { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
+        { id: 'campaigns', label: 'Campaign Clusters', icon: Flag },
+        { id: 'graph' as const, label: 'Investigation Graph', icon: Network },
+        { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
+      ],
+    },
+    {
+      title: 'Forensic Management',
+      items: [
+        { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
+        { id: 'reports', label: 'Forensic Reports', icon: FileText },
+        ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
+        { id: 'settings', label: 'Settings', icon: Settings },
+      ],
+    },
+  ];
 
   return (
     <aside className="w-[232px] bg-navy-sidebar text-text-dark flex flex-col h-screen sticky top-0 border-r border-navy-border select-none z-20 shrink-0">
