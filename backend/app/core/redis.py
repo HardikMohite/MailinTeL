@@ -36,11 +36,17 @@ class RedisManager:
     @property
     def client(self) -> Redis:
         if self._client is None:
+            url = settings.REDIS_URL
+            # Auto-upgrade to rediss:// when SSL is enabled or Upstash endpoint is used
+            if (settings.REDIS_SSL or "upstash.io" in url) and url.startswith("redis://"):
+                url = "rediss://" + url[len("redis://"):]
+
             self._client = aioredis.from_url(
-                settings.REDIS_URL,
+                url,
                 decode_responses=True,
-                socket_timeout=1.0,
-                socket_connect_timeout=0.5,
+                socket_timeout=5.0,
+                socket_connect_timeout=5.0,
+                retry_on_timeout=True,
             )
         return self._client
 

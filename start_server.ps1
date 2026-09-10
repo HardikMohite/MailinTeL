@@ -95,47 +95,70 @@ if (-not (Test-Path $EnvFile)) {
     }
 }
 
-# 3. Redis Infrastructure Check & Docker Activation
+# 3. Redis Infrastructure Check & Activation
 Write-Host ""
-Write-Host "[Step 1/4] Verifying & Activating Redis Cache Service (Docker)..." -ForegroundColor Green
+Write-Host "[Step 1/4] Verifying Redis Cache & Queue Service..." -ForegroundColor Green
 
-$RedisRunning = $false
-try {
-    $tcp = New-Object System.Net.Sockets.TcpClient
-    $connect = $tcp.BeginConnect("127.0.0.1", 6379, $null, $null)
-    $wait = $connect.AsyncWaitHandle.WaitOne(800, $false)
-    if ($wait -and $tcp.Connected) {
-        $tcp.EndConnect($connect)
-        $RedisRunning = $true
-    }
-    $tcp.Close()
-} catch {
-    $RedisRunning = $false
+$EnvContent = Get-Content $EnvFile -Raw -ErrorAction SilentlyContinue
+$IsRemoteRedis = $false
+$RedisUrlVal = "redis://localhost:6379/0"
+
+if ($EnvContent -match "REDIS_URL\s*=\s*([^\r\n]+)") {
+    $RedisUrlVal = $matches[1].Trim()
 }
 
-if ($RedisRunning) {
-    Write-Host "    [+] Redis is operational and accepting connections on 127.0.0.1:6379." -ForegroundColor Green
-} else {
-    Write-Host "    [-] Redis not detected on port 6379. Checking Docker..." -ForegroundColor Yellow
-    $DockerCmd = Get-Command docker -ErrorAction SilentlyContinue
-    if ($DockerCmd) {
-        try {
-            $redisContainer = docker ps -a --filter "name=^mailintel-redis$" --format "{{.Status}}" 2>$null
-            if ($redisContainer -and ($redisContainer -notmatch "^Up")) {
-                Write-Host "    [+] Starting existing Docker container 'mailintel-redis'..." -ForegroundColor Cyan
-                docker start mailintel-redis | Out-Null
-            } elseif (-not $redisContainer) {
-                Write-Host "    [+] Launching Redis via Docker Compose..." -ForegroundColor Cyan
-                docker compose up -d redis | Out-Null
-            }
-            Start-Sleep -Seconds 1
-            Write-Host "    [+] Redis service started successfully via Docker." -ForegroundColor Green
-        } catch {
-            Write-Host "    [!] Could not start Redis via Docker ($($_.Exception.Message))." -ForegroundColor Yellow
-            Write-Host "        MailinteL will continue in resilient mode." -ForegroundColor Yellow
-        }
+if ($RedisUrlVal -match "upstash\.io" -or $RedisUrlVal -match "^rediss://" -or ($EnvContent -match "REDIS_HOST\s*=\s*([^\r\n]+)" -and $matches[1].Trim() -notmatch "localhost|127\.0\.0\.1")) {
+    $IsRemoteRedis = $true
+}
+
+if ($IsRemoteRedis) {
+    Write-Host "    [*] Cloud Redis detected in configuration (Upstash TLS)..." -ForegroundColor Cyan
+    $testCmd = "import asyncio, redis.asyncio as aioredis; asyncio.run((lambda: aioredis.from_url('$RedisUrlVal', socket_timeout=5.0, socket_connect_timeout=5.0).ping())())"
+    & $VenvPython -c $testCmd 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "    [+] Upstash Cloud Redis is operational and accepting TLS connections." -ForegroundColor Green
     } else {
-        Write-Host "    [!] Docker CLI not detected. MailinteL will run in resilient local cache mode." -ForegroundColor Yellow
+        Write-Host "    [!] Cloud Redis ping timed out or failed. MailinteL will run in resilient cache mode." -ForegroundColor Yellow
+    }
+} else {
+    $RedisRunning = $false
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $connect = $tcp.BeginConnect("127.0.0.1", 6379, $null, $null)
+        $wait = $connect.AsyncWaitHandle.WaitOne(800, $false)
+        if ($wait -and $tcp.Connected) {
+            $tcp.EndConnect($connect)
+            $RedisRunning = $true
+        }
+        $tcp.Close()
+    } catch {
+        $RedisRunning = $false
+    }
+
+    if ($RedisRunning) {
+        Write-Host "    [+] Local Redis is operational and accepting connections on 127.0.0.1:6379." -ForegroundColor Green
+    } else {
+        Write-Host "    [-] Local Redis not detected on port 6379. Checking Docker..." -ForegroundColor Yellow
+        $DockerCmd = Get-Command docker -ErrorAction SilentlyContinue
+        if ($DockerCmd) {
+            try {
+                $redisContainer = docker ps -a --filter "name=^mailintel-redis$" --format "{{.Status}}" 2>$null
+                if ($redisContainer -and ($redisContainer -notmatch "^Up")) {
+                    Write-Host "    [+] Starting existing Docker container 'mailintel-redis'..." -ForegroundColor Cyan
+                    docker start mailintel-redis | Out-Null
+                } elseif (-not $redisContainer) {
+                    Write-Host "    [+] Launching Redis via Docker Compose..." -ForegroundColor Cyan
+                    docker compose up -d redis | Out-Null
+                }
+                Start-Sleep -Seconds 1
+                Write-Host "    [+] Redis service started successfully via Docker." -ForegroundColor Green
+            } catch {
+                Write-Host "    [!] Could not start Redis via Docker ($($_.Exception.Message))." -ForegroundColor Yellow
+                Write-Host "        MailinteL will continue in resilient mode." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "    [!] Docker CLI not detected. MailinteL will run in resilient local cache mode." -ForegroundColor Yellow
+        }
     }
 }
 

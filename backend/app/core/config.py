@@ -120,6 +120,8 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
+    REDIS_PASSWORD: Optional[str] = None
+    REDIS_SSL: bool = False
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Initial Administrator Account (Configured via .env)
