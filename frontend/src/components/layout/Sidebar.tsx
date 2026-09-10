@@ -147,13 +147,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
                   <button
                     key={item.id}
                     onClick={() => onTabChange(item.id)}
-                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] font-medium transition-colors ${
+                    className={`relative w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] font-medium transition-all group ${
                       isActive
-                        ? 'bg-brand text-white'
+                        ? 'bg-brand text-white shadow-xs font-semibold'
                         : 'text-slate-300 hover:bg-navy-elevated hover:text-white'
                     }`}
                   >
-                    <Icon className="w-4 h-4 shrink-0" />
+                    {isActive && (
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-1 bg-sky-300 rounded-r-full shadow-xs" />
+                    )}
+                    <Icon className={`w-4 h-4 shrink-0 transition-transform ${isActive ? 'scale-110 text-white' : 'text-slate-400 group-hover:text-white group-hover:scale-105'}`} />
                     <span className="truncate flex-1 text-left">{item.label}</span>
                     {item.badge && (
                       <span className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-navy-elevated text-slate-400 border border-navy-border">
@@ -170,19 +173,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
 
       {/* Footer */}
       <div className="p-3 border-t border-navy-border shrink-0">
-        <div className="rounded-lg bg-navy-deep border border-navy-border px-3 py-2.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            MVP — Phase 9
+        <div className="rounded-xl bg-navy-deep border border-navy-border px-3 py-2.5">
+          <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-200">
+            <span className="relative flex h-2 w-2">
+              <span className="beacon-pulse absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+            <span>Security Engine Live</span>
           </div>
-          <p className="text-[10.5px] text-slate-500 leading-snug mt-1">
-            Authentication and role-based access control are live.
+          <p className="text-[10.5px] text-slate-400 leading-snug mt-1">
+            RBAC & forensic pipeline synchronized.
           </p>
           <a
             href="http://localhost:8000/docs"
             target="_blank"
             rel="noreferrer"
-            className="mt-2 flex items-center gap-1 text-[10.5px] font-medium text-sky-400 hover:text-sky-300"
+            className="mt-2 inline-flex items-center gap-1 text-[10.5px] font-medium text-sky-400 hover:text-sky-300 transition-colors"
           >
             API Docs <ExternalLink className="w-3 h-3" />
           </a>

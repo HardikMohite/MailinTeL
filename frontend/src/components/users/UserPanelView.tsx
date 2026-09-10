@@ -389,44 +389,92 @@ export const UserPanelView: React.FC = () => {
       </div>
 
       {/* KPI Cards Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl bg-workspace-card border border-workspace-border shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-brand-soft text-brand flex items-center justify-center shrink-0">
-            <Users className="w-5 h-5" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+        <div
+          style={{ '--kpi-accent': '#2563B8' } as React.CSSProperties}
+          className="kpi-card p-4 flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wider truncate">
+              Total Users
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-brand-soft text-brand flex items-center justify-center shrink-0">
+              <Users className="w-4 h-4" />
+            </div>
           </div>
           <div>
-            <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">Total Users</div>
-            <div className="text-xl font-bold text-text-primary">{loading ? '—' : metrics.total}</div>
+            <div className="text-2xl font-extrabold text-text-primary tabular-nums tracking-tight">
+              {loading ? <span className="inline-block w-12 h-6 rounded shimmer-bg" /> : metrics.total}
+            </div>
+            <div className="text-[10.5px] text-text-muted mt-1 truncate">
+              Provisioned accounts
+            </div>
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-workspace-card border border-workspace-border shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-            <UserCheck className="w-5 h-5" />
+        <div
+          style={{ '--kpi-accent': '#2D8B68' } as React.CSSProperties}
+          className="kpi-card p-4 flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wider truncate">
+              Active Accounts
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+              <UserCheck className="w-4 h-4" />
+            </div>
           </div>
           <div>
-            <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">Active Accounts</div>
-            <div className="text-xl font-bold text-text-primary">{loading ? '—' : metrics.active}</div>
+            <div className="text-2xl font-extrabold text-text-primary tabular-nums tracking-tight">
+              {loading ? <span className="inline-block w-12 h-6 rounded shimmer-bg" /> : metrics.active}
+            </div>
+            <div className="text-[10.5px] text-emerald-700 font-medium mt-1 truncate">
+              {metrics.total > 0 ? `${Math.round((metrics.active / metrics.total) * 100)}% active rate` : 'All healthy'}
+            </div>
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-workspace-card border border-workspace-border shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-            <Shield className="w-5 h-5" />
+        <div
+          style={{ '--kpi-accent': '#7C62C8' } as React.CSSProperties}
+          className="kpi-card p-4 flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wider truncate">
+              Administrators
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+              <Shield className="w-4 h-4" />
+            </div>
           </div>
           <div>
-            <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">Administrators</div>
-            <div className="text-xl font-bold text-text-primary">{loading ? '—' : metrics.admins}</div>
+            <div className="text-2xl font-extrabold text-text-primary tabular-nums tracking-tight">
+              {loading ? <span className="inline-block w-12 h-6 rounded shimmer-bg" /> : metrics.admins}
+            </div>
+            <div className="text-[10.5px] text-text-muted mt-1 truncate">
+              System & Org Admins
+            </div>
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-workspace-card border border-workspace-border shadow-xs flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
-            <ShieldCheck className="w-5 h-5" />
+        <div
+          style={{ '--kpi-accent': '#0284C7' } as React.CSSProperties}
+          className="kpi-card p-4 flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wider truncate">
+              Security Analysts
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
           </div>
           <div>
-            <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">Security Analysts</div>
-            <div className="text-xl font-bold text-text-primary">{loading ? '—' : metrics.analysts}</div>
+            <div className="text-2xl font-extrabold text-text-primary tabular-nums tracking-tight">
+              {loading ? <span className="inline-block w-12 h-6 rounded shimmer-bg" /> : metrics.analysts}
+            </div>
+            <div className="text-[10.5px] text-text-muted mt-1 truncate">
+              Forensic & Triage Roles
+            </div>
           </div>
         </div>
       </div>

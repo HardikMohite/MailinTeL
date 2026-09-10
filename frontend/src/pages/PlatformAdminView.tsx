@@ -377,40 +377,84 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
         <section className="space-y-4">
           {/* KPI Metrics Strip */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-            <div className="bg-workspace-card border border-workspace-border rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-text-muted">Total Phishing Threats</span>
-                <Inbox className="w-4 h-4 text-brand" />
+            <div
+              style={{ '--kpi-accent': '#2563B8' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                  Total Phishing Threats
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-brand-soft text-brand flex items-center justify-center shrink-0">
+                  <Inbox className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-text-primary mt-2">{emailStats.total}</div>
-              <div className="text-[11px] text-text-muted mt-1">Cross-tenant threat queue</div>
+              <div>
+                <div className="text-2xl font-extrabold text-text-primary tabular-nums tracking-tight">
+                  {emailStats.total}
+                </div>
+                <div className="text-[10.5px] text-text-muted mt-1">Cross-tenant threat queue</div>
+              </div>
             </div>
 
-            <div className="bg-workspace-card border border-rose-200/80 rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-rose-600">High / Critical Phishing</span>
-                <Flame className="w-4 h-4 text-rose-600" />
+            <div
+              style={{ '--kpi-accent': '#C73A32' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-rose-600">
+                  High / Critical Phishing
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <Flame className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-rose-700 mt-2">{emailStats.criticalOrHigh}</div>
-              <div className="text-[11px] text-rose-600/80 mt-1">Confirmed or critical risk</div>
+              <div>
+                <div className="text-2xl font-extrabold text-rose-700 tabular-nums tracking-tight">
+                  {emailStats.criticalOrHigh}
+                </div>
+                <div className="text-[10.5px] text-rose-600/80 mt-1">Confirmed or critical risk</div>
+              </div>
             </div>
 
-            <div className="bg-workspace-card border border-amber-200/80 rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-amber-600">Suspicious Ingestions</span>
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <div
+              style={{ '--kpi-accent': '#D88916' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-600">
+                  Suspicious Ingestions
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-amber-700 mt-2">{emailStats.suspicious}</div>
-              <div className="text-[11px] text-amber-600/80 mt-1">Requires analyst triage</div>
+              <div>
+                <div className="text-2xl font-extrabold text-amber-700 tabular-nums tracking-tight">
+                  {emailStats.suspicious}
+                </div>
+                <div className="text-[10.5px] text-amber-600/80 mt-1">Requires analyst triage</div>
+              </div>
             </div>
 
-            <div className="bg-workspace-card border border-sky-200/80 rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-sky-600">Active Investigations</span>
-                <Activity className="w-4 h-4 text-sky-600" />
+            <div
+              style={{ '--kpi-accent': '#0284C7' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-600">
+                  Active Investigations
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+                  <Activity className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-sky-700 mt-2">{emailStats.investigating}</div>
-              <div className="text-[11px] text-sky-600/80 mt-1">Active forensic cases</div>
+              <div>
+                <div className="text-2xl font-extrabold text-sky-700 tabular-nums tracking-tight">
+                  {emailStats.investigating}
+                </div>
+                <div className="text-[10.5px] text-sky-600/80 mt-1">Active forensic cases</div>
+              </div>
             </div>
           </div>
 

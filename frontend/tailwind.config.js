@@ -59,6 +59,11 @@ export default {
         sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'Courier New', 'monospace'],
       },
+      boxShadow: {
+        'xs': '0 1px 2px 0 rgba(16, 28, 51, 0.05)',
+        'card': '0 1px 3px 0 rgba(16, 28, 51, 0.05), 0 1px 2px -1px rgba(16, 28, 51, 0.03)',
+        'card-hover': '0 12px 24px -4px rgba(16, 28, 51, 0.08), 0 4px 8px -2px rgba(16, 28, 51, 0.03)',
+      },
     },
   },
   plugins: [],
