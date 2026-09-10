@@ -16,6 +16,11 @@ import {
   UserCheck,
   Mail,
   Calendar,
+  History,
+  Activity,
+  Info,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import {
   listPlatformUsers,
@@ -27,8 +32,10 @@ import {
   inviteOrgMember,
   updateOrgMemberRole,
   deactivateOrgMember,
+  listPlatformAuditLog,
   OrgMember,
   OrganizationItem,
+  AuditLogEntry,
   AssignableRole,
 } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -59,6 +66,23 @@ const roleBadgeClass = (code: string) => {
     default:
       return 'bg-slate-100 text-slate-700 border-slate-200';
   }
+};
+
+const actionBadgeClass = (action: string) => {
+  const act = action.toUpperCase();
+  if (act.includes('LOGIN') || act.includes('AUTH')) {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  }
+  if (act.includes('DELETE') || act.includes('DEACTIVATE')) {
+    return 'bg-rose-50 text-rose-700 border-rose-200';
+  }
+  if (act.includes('ROLE') || act.includes('UPDATE')) {
+    return 'bg-amber-50 text-amber-700 border-amber-200';
+  }
+  if (act.includes('INVITE') || act.includes('CREATE')) {
+    return 'bg-blue-50 text-blue-700 border-blue-200';
+  }
+  return 'bg-slate-50 text-slate-700 border-slate-200';
 };
 
 const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : 'Never');
@@ -98,6 +122,15 @@ export const UserPanelView: React.FC = () => {
   // Action menu & busy states
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
 
+  // Double-clicked user audit logs state
+  const [selectedAuditUser, setSelectedAuditUser] = useState<GenericUserItem | null>(null);
+  const [userAuditLogs, setUserAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditSearchQuery, setAuditSearchQuery] = useState('');
+  const [auditActionFilter, setAuditActionFilter] = useState('');
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<string>>(new Set());
+
   // Load organizations
   const loadOrgs = useCallback(async () => {
     if (!isSysAdmin) return;
@@ -136,6 +169,54 @@ export const UserPanelView: React.FC = () => {
     loadUsers();
   }, [loadUsers]);
 
+  // Open audit modal for a user (on double click or action button)
+  const handleOpenAuditModal = useCallback(async (targetUser: GenericUserItem) => {
+    setSelectedAuditUser(targetUser);
+    setAuditSearchQuery('');
+    setAuditActionFilter('');
+    setExpandedLogIds(new Set());
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const data = await listPlatformAuditLog({
+        actor_user_id: targetUser.id,
+        limit: 250,
+      });
+      setUserAuditLogs(data);
+    } catch (err) {
+      setAuditError(parseApiError(err).message || 'Failed to retrieve audit log entries for this user.');
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [parseApiError]);
+
+  // Reload current user's audit logs
+  const handleRefreshUserAudit = useCallback(async () => {
+    if (!selectedAuditUser) return;
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const data = await listPlatformAuditLog({
+        actor_user_id: selectedAuditUser.id,
+        limit: 250,
+      });
+      setUserAuditLogs(data);
+    } catch (err) {
+      setAuditError(parseApiError(err).message);
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [selectedAuditUser, parseApiError]);
+
+  const toggleLogExpand = (logId: string) => {
+    setExpandedLogIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(logId)) next.delete(logId);
+      else next.add(logId);
+      return next;
+    });
+  };
+
   // Filtered roster
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
@@ -152,6 +233,25 @@ export const UserPanelView: React.FC = () => {
       return true;
     });
   }, [users, searchQuery, selectedRole, selectedStatus]);
+
+  // Filtered audit logs for the selected user
+  const filteredAuditLogs = useMemo(() => {
+    return userAuditLogs.filter((log) => {
+      if (auditActionFilter && log.action !== auditActionFilter) return false;
+      if (auditSearchQuery.trim()) {
+        const q = auditSearchQuery.toLowerCase();
+        const matchAction = log.action.toLowerCase().includes(q);
+        const matchResource = (log.resource_type || '').toLowerCase().includes(q);
+        const matchId = (log.resource_id || '').toLowerCase().includes(q);
+        if (!matchAction && !matchResource && !matchId) return false;
+      }
+      return true;
+    });
+  }, [userAuditLogs, auditActionFilter, auditSearchQuery]);
+
+  const availableAuditActions = useMemo(() => {
+    return Array.from(new Set(userAuditLogs.map((l) => l.action))).filter(Boolean);
+  }, [userAuditLogs]);
 
   // Metrics summary
   const metrics = useMemo(() => {
@@ -280,7 +380,7 @@ export const UserPanelView: React.FC = () => {
               setShowInviteModal(true);
               setInviteError(null);
             }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-xs font-semibold hover:bg-brand-hover transition-colors shadow-xs"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-xs font-semibold hover:bg-brand-hover transition-colors shadow-xs"
           >
             <UserPlus className="w-4 h-4" />
             <span>Invite New User</span>
@@ -426,9 +526,15 @@ export const UserPanelView: React.FC = () => {
             </select>
           </div>
 
-          <div className="text-xs text-text-muted">
-            Showing <strong className="text-text-primary">{filteredUsers.length}</strong> of{' '}
-            <strong className="text-text-primary">{users.length}</strong> users
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 text-[11px] text-brand font-medium bg-brand-soft/60 px-2.5 py-1 rounded-md border border-brand/20">
+              <Info className="w-3.5 h-3.5 shrink-0" />
+              <span>Double-click any row to view user audit logs</span>
+            </div>
+            <div className="text-xs text-text-muted">
+              Showing <strong className="text-text-primary">{filteredUsers.length}</strong> of{' '}
+              <strong className="text-text-primary">{users.length}</strong>
+            </div>
           </div>
         </div>
 
@@ -469,12 +575,14 @@ export const UserPanelView: React.FC = () => {
                   return (
                     <tr
                       key={u.id}
-                      className="hover:bg-workspace/50 transition-colors group"
+                      onDoubleClick={() => handleOpenAuditModal(u)}
+                      className="hover:bg-brand-soft/30 cursor-pointer transition-colors group select-none"
+                      title="Double-click to view audit logs for this user"
                     >
                       {/* User Info */}
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-brand-soft text-brand font-bold text-xs flex items-center justify-center shrink-0 border border-brand/20">
+                          <div className="w-8 h-8 rounded-full bg-brand-soft text-brand font-bold text-xs flex items-center justify-center shrink-0 border border-brand/20 group-hover:scale-105 transition-transform">
                             {initials}
                           </div>
                           <div className="min-w-0">
@@ -534,8 +642,17 @@ export const UserPanelView: React.FC = () => {
                       </td>
 
                       {/* Actions Menu */}
-                      <td className="px-4 py-3.5 text-right whitespace-nowrap relative">
+                      <td className="px-4 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <div className="inline-flex items-center gap-1.5">
+                          {/* Dedicated View Audit Logs Button */}
+                          <button
+                            onClick={() => handleOpenAuditModal(u)}
+                            className="p-1.5 rounded-lg border border-workspace-border text-text-secondary hover:text-brand hover:bg-brand-soft/50 hover:border-brand/30 transition-colors"
+                            title="View audit logs (or double-click row)"
+                          >
+                            <History className="w-3.5 h-3.5" />
+                          </button>
+
                           <select
                             disabled={isBusy || isSelf}
                             value={u.role}
@@ -572,6 +689,262 @@ export const UserPanelView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* User Audit Logs Modal (Triggered on Double-Click) */}
+      {selectedAuditUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-workspace-card border border-workspace-border rounded-2xl w-full max-w-4xl max-h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-workspace-border flex items-center justify-between bg-workspace/50 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-brand-soft text-brand flex items-center justify-center font-bold text-sm border border-brand/20">
+                  {(selectedAuditUser.full_name || selectedAuditUser.email || 'U')
+                    .split(' ')
+                    .map((n) => n[0])
+                    .slice(0, 2)
+                    .join('')
+                    .toUpperCase()}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-text-primary">
+                      {selectedAuditUser.full_name || selectedAuditUser.email}
+                    </h2>
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-[10.5px] font-semibold border ${roleBadgeClass(
+                        selectedAuditUser.role
+                      )}`}
+                    >
+                      {roleLabel(selectedAuditUser.role)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-text-muted flex items-center gap-2 mt-0.5">
+                    <span>{selectedAuditUser.email}</span>
+                    <span>•</span>
+                    <span>{selectedAuditUser.organization_name || 'System / Cross-organization'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleRefreshUserAudit}
+                  disabled={auditLoading}
+                  className="p-2 rounded-lg border border-workspace-border bg-workspace-card text-text-secondary hover:text-text-primary hover:bg-workspace transition-colors disabled:opacity-50"
+                  title="Refresh audit logs"
+                >
+                  <RefreshCw className={`w-4 h-4 ${auditLoading ? 'animate-spin' : ''}`} />
+                </button>
+                <button
+                  onClick={() => setSelectedAuditUser(null)}
+                  className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-workspace transition-colors"
+                  title="Close modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Metrics Bar */}
+            <div className="px-6 py-3 border-b border-workspace-border bg-workspace-header/30 flex items-center justify-between flex-wrap gap-3 text-xs shrink-0">
+              <div className="flex items-center gap-6">
+                <div>
+                  <span className="text-text-muted">Total Recorded Events:</span>{' '}
+                  <strong className="text-text-primary font-semibold">{userAuditLogs.length}</strong>
+                </div>
+                <div>
+                  <span className="text-text-muted">Action Types:</span>{' '}
+                  <strong className="text-text-primary font-semibold">{availableAuditActions.length}</strong>
+                </div>
+                <div>
+                  <span className="text-text-muted">Latest Activity:</span>{' '}
+                  <strong className="text-text-primary font-semibold">
+                    {userAuditLogs.length > 0 ? fmtDateTime(userAuditLogs[0].occurred_at) : 'None'}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-1 sm:flex-initial justify-end">
+                {/* Search in logs */}
+                <div className="relative min-w-[180px]">
+                  <Search className="w-3.5 h-3.5 text-text-muted absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={auditSearchQuery}
+                    onChange={(e) => setAuditSearchQuery(e.target.value)}
+                    placeholder="Search action or resource…"
+                    className="w-full pl-8 pr-3 py-1 text-xs bg-workspace-card border border-workspace-border rounded-lg text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-brand/30"
+                  />
+                </div>
+
+                {/* Filter by action */}
+                {availableAuditActions.length > 0 && (
+                  <select
+                    value={auditActionFilter}
+                    onChange={(e) => setAuditActionFilter(e.target.value)}
+                    className="px-2.5 py-1 text-xs bg-workspace-card border border-workspace-border rounded-lg text-text-secondary focus:outline-none focus:ring-1 focus:ring-brand/30"
+                  >
+                    <option value="">All Action Types</option>
+                    {availableAuditActions.map((act) => (
+                      <option key={act} value={act}>
+                        {act}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Body / Logs Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {auditError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center gap-2 text-xs text-rose-800">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{auditError}</span>
+                </div>
+              )}
+
+              {auditLoading ? (
+                <div className="p-16 flex flex-col items-center justify-center text-text-muted text-xs gap-3">
+                  <Loader2 className="w-6 h-6 text-brand animate-spin" />
+                  <span>Fetching security audit trail for {selectedAuditUser.full_name || selectedAuditUser.email}…</span>
+                </div>
+              ) : filteredAuditLogs.length === 0 ? (
+                <div className="p-16 text-center text-xs text-text-muted space-y-2">
+                  <Activity className="w-8 h-8 text-text-muted mx-auto opacity-50" />
+                  <div className="font-semibold text-text-primary text-sm">No Audit Logs Found</div>
+                  <p className="max-w-md mx-auto text-text-muted">
+                    No matching audit log entries were found for this user. Administrative actions, role adjustments, and
+                    account activities will be logged chronologically here.
+                  </p>
+                </div>
+              ) : (
+                <div className="border border-workspace-border rounded-xl overflow-hidden shadow-2xs">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-workspace-header border-b border-workspace-border text-text-muted uppercase text-[10.5px] tracking-wider font-semibold">
+                      <tr>
+                        <th className="px-4 py-2.5">Timestamp</th>
+                        <th className="px-4 py-2.5">Action</th>
+                        <th className="px-4 py-2.5">Target Resource</th>
+                        <th className="px-4 py-2.5">Scope</th>
+                        <th className="px-4 py-2.5 text-right">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-workspace-border">
+                      {filteredAuditLogs.map((log) => {
+                        const isExpanded = expandedLogIds.has(log.id);
+                        const hasMetadata = log.metadata_json && Object.keys(log.metadata_json).length > 0;
+
+                        return (
+                          <React.Fragment key={log.id}>
+                            <tr
+                              onClick={() => hasMetadata && toggleLogExpand(log.id)}
+                              className={`hover:bg-workspace/60 transition-colors ${
+                                hasMetadata ? 'cursor-pointer' : ''
+                              }`}
+                            >
+                              <td className="px-4 py-3 text-text-muted font-mono text-[11px] whitespace-nowrap">
+                                <div className="flex items-center gap-1.5">
+                                  <Calendar className="w-3 h-3 text-text-muted" />
+                                  <span>{fmtDateTime(log.occurred_at)}</span>
+                                </div>
+                              </td>
+
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-md font-mono text-[11px] font-semibold border ${actionBadgeClass(
+                                    log.action
+                                  )}`}
+                                >
+                                  {log.action}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3 text-text-secondary whitespace-nowrap font-mono text-[11px]">
+                                {log.resource_type ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-semibold text-text-primary">{log.resource_type}</span>
+                                    {log.resource_id && (
+                                      <span className="text-text-muted">
+                                        ({log.resource_id.slice(0, 8)}…)
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+
+                              <td className="px-4 py-3 text-text-muted whitespace-nowrap text-[11px]">
+                                {log.organization_id ? (
+                                  <span className="flex items-center gap-1">
+                                    <Building2 className="w-3 h-3 text-text-muted" />
+                                    <span>
+                                      {organizations.find((o) => o.id === log.organization_id)?.name ||
+                                        log.organization_id.slice(0, 8) + '…'}
+                                    </span>
+                                  </span>
+                                ) : (
+                                  'Platform / Global'
+                                )}
+                              </td>
+
+                              <td className="px-4 py-3 text-right whitespace-nowrap">
+                                {hasMetadata ? (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleLogExpand(log.id);
+                                    }}
+                                    className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline"
+                                  >
+                                    <span>{isExpanded ? 'Hide' : 'View Payload'}</span>
+                                    {isExpanded ? (
+                                      <ChevronDown className="w-3 h-3" />
+                                    ) : (
+                                      <ChevronRight className="w-3 h-3" />
+                                    )}
+                                  </button>
+                                ) : (
+                                  <span className="text-text-muted text-[11px]">None</span>
+                                )}
+                              </td>
+                            </tr>
+
+                            {/* Collapsible Metadata Payload Row */}
+                            {isExpanded && hasMetadata && (
+                              <tr className="bg-workspace/80">
+                                <td colSpan={5} className="px-4 py-3">
+                                  <div className="rounded-lg bg-navy-sidebar text-slate-200 p-3 font-mono text-[11px] overflow-x-auto border border-navy-border shadow-inner">
+                                    <pre>{JSON.stringify(log.metadata_json, null, 2)}</pre>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3 border-t border-workspace-border bg-workspace-header/50 flex items-center justify-between text-xs text-text-muted shrink-0">
+              <span>
+                Double-click any user in the User Panel anytime to open their specific audit trail.
+              </span>
+              <button
+                onClick={() => setSelectedAuditUser(null)}
+                className="px-4 py-1.5 rounded-lg border border-workspace-border bg-workspace-card text-xs font-semibold text-text-primary hover:bg-workspace transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Invite User Modal */}
       {showInviteModal && (
