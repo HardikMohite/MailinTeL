@@ -47,20 +47,37 @@ interface GeoIntelligenceMapProps {
   embedded?: boolean; // When rendered inside AnalysisWorkspace
 }
 
-const TILE_SERVERS: Record<TileLayerType, { url: string; attribution: string; name: string }> = {
+const TILE_SERVERS: Record<
+  TileLayerType,
+  {
+    url: string;
+    options: L.TileLayerOptions;
+    name: string;
+  }
+> = {
   dark: {
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap',
+    options: {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    },
     name: 'Tactical Dark',
   },
   voyager: {
-    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OpenStreetMap Team',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    options: {
+      attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, USGS, METI',
+      maxZoom: 19,
+    },
     name: 'City Streets (Detailed)',
   },
   osm: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors',
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    options: {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    },
     name: 'Standard OSM',
   },
 };
@@ -113,11 +130,8 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
       attributionControl: false,
     });
 
-    const tileLayer = L.tileLayer(TILE_SERVERS[activeTileType].url, {
-      attribution: TILE_SERVERS[activeTileType].attribution,
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(map);
+    const activeConfig = TILE_SERVERS[activeTileType];
+    const tileLayer = L.tileLayer(activeConfig.url, activeConfig.options).addTo(map);
 
     tileLayerRef.current = tileLayer;
     markersLayerGroupRef.current = L.layerGroup().addTo(map);
@@ -141,11 +155,8 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
     if (tileLayerRef.current) {
       mapInstanceRef.current.removeLayer(tileLayerRef.current);
     }
-    const newTile = L.tileLayer(TILE_SERVERS[type].url, {
-      attribution: TILE_SERVERS[type].attribution,
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(mapInstanceRef.current);
+    const targetConfig = TILE_SERVERS[type];
+    const newTile = L.tileLayer(targetConfig.url, targetConfig.options).addTo(mapInstanceRef.current);
     tileLayerRef.current = newTile;
   };
 
