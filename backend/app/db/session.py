@@ -35,17 +35,25 @@ def get_engine_connect_args() -> Dict[str, Any]:
     return args
 
 
-# Determine engine pooling options: keep warm pooled connections alive
+from sqlalchemy.pool import NullPool
+
+# Determine engine pooling options: keep warm pooled connections alive, or use NullPool for transaction poolers
 _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,
     "future": True,
-    "pool_pre_ping": True,
-    "pool_size": 10,
-    "max_overflow": 20,
-    "pool_timeout": 30,
-    "pool_recycle": 300,
 }
+
+if settings.is_pooler_connection:
+    _engine_kwargs["poolclass"] = NullPool
+else:
+    _engine_kwargs.update({
+        "pool_pre_ping": True,
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_timeout": 30,
+        "pool_recycle": 300,
+    })
 
 # Create Async Engine for PostgreSQL
 engine: AsyncEngine = create_async_engine(
