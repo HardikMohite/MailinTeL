@@ -13,7 +13,6 @@ import {
   Users,
   UserCheck,
   Building2,
-  ShieldCheck,
   ExternalLink,
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
@@ -75,7 +74,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           title: 'Admin Command',
           items: [
             { id: 'dashboard', label: 'Admin Dashboard', icon: LayoutDashboard },
-            { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
           ],
         },
         {
@@ -99,8 +97,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           title: 'Governance & Access',
           items: [
             ...(canManageTeam ? [{ id: 'users' as const, label: 'User Panel', icon: Users }] : []),
-            { id: 'organization' as const, label: 'Organization', icon: Building2 },
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: UserCheck }] : []),
+            { id: 'organization' as const, label: 'Organization', icon: Building2 },
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],
         },
