@@ -26,7 +26,6 @@ import {
 import { DashboardView } from '../components/dashboard/DashboardView';
 import {
   listPlatformOrganizations,
-  createPlatformOrganization,
   listPlatformUsers,
   invitePlatformUser,
   updatePlatformUserRole,
@@ -89,11 +88,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   const [organizations, setOrganizations] = useState<OrganizationItem[]>([]);
   const [orgsLoading, setOrgsLoading] = useState(true);
   const [orgsError, setOrgsError] = useState<string | null>(null);
-  const [showCreateOrg, setShowCreateOrg] = useState(false);
-  const [newOrgName, setNewOrgName] = useState('');
-  const [newOrgType, setNewOrgType] = useState('ENTERPRISE');
-  const [creatingOrg, setCreatingOrg] = useState(false);
-  const [createOrgError, setCreateOrgError] = useState<string | null>(null);
 
   // --- Cross-org users -------------------------------------------------
   const [members, setMembers] = useState<PlatformMember[]>([]);
@@ -278,22 +272,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     );
   }
 
-  const handleCreateOrg = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreateOrgError(null);
-    setCreatingOrg(true);
-    try {
-      await createPlatformOrganization({ name: newOrgName.trim(), organization_type: newOrgType.trim() || undefined });
-      setNewOrgName('');
-      setNewOrgType('ENTERPRISE');
-      setShowCreateOrg(false);
-      await loadOrganizations();
-    } catch (err) {
-      setCreateOrgError(parseApiError(err).message);
-    } finally {
-      setCreatingOrg(false);
-    }
-  };
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -712,56 +690,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
       {activeSection === 'organizations' && (
         <section className="space-y-3">
 
-          {showCreateOrg && (
-            <div className="bg-workspace-card border border-workspace-border rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-[13.5px] font-semibold text-text-primary">Create organization</h4>
-                <button onClick={() => setShowCreateOrg(false)} className="text-text-muted hover:text-text-primary">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <form onSubmit={handleCreateOrg} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2">
-                  <label className="block text-[12px] font-medium text-text-secondary mb-1">Organization name</label>
-                  <input
-                    type="text"
-                    required
-                    value={newOrgName}
-                    onChange={(e) => setNewOrgName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-workspace-border text-[13px] focus:outline-none focus:ring-2 focus:ring-brand/30"
-                    placeholder="Acme Bank"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[12px] font-medium text-text-secondary mb-1">Type</label>
-                  <input
-                    type="text"
-                    value={newOrgType}
-                    onChange={(e) => setNewOrgType(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-workspace-border text-[13px] focus:outline-none focus:ring-2 focus:ring-brand/30"
-                    placeholder="ENTERPRISE"
-                  />
-                </div>
-                <div className="sm:col-span-3 flex items-center gap-3">
-                  <button
-                    type="submit"
-                    disabled={creatingOrg || !newOrgName.trim()}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors disabled:opacity-50"
-                  >
-                    {creatingOrg && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Create organization
-                  </button>
-                  {createOrgError && (
-                    <span className="text-[12.5px] text-severity-critical flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      {createOrgError}
-                    </span>
-                  )}
-                </div>
-              </form>
-            </div>
-          )}
-
           {orgsError && (
             <div className="bg-severity-critical-soft border border-severity-critical/30 rounded-xl p-4 flex items-center gap-2 text-[13px] text-severity-critical">
               <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -774,16 +702,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
               <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">
                 All Organizations ({organizations.length})
               </span>
-              <button
-                onClick={() => {
-                  setShowCreateOrg(true);
-                  setCreateOrgError(null);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand text-white text-xs font-medium hover:bg-brand-hover transition-colors"
-              >
-                <Building2 className="w-3.5 h-3.5" />
-                New organization
-              </button>
             </div>
             {orgsLoading ? (
               <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
@@ -822,44 +740,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
       {/* SECTION 3: USERS ACROSS ORGANIZATIONS */}
       {activeSection === 'users' && (
         <section className="space-y-3">
-          <div className="bg-workspace-card border border-workspace-border rounded-xl p-5 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-brand-soft flex items-center justify-center">
-                <Users className="w-4 h-4 text-brand" />
-              </div>
-              <div>
-                <h3 className="text-[13.5px] font-semibold text-text-primary">Users across organizations</h3>
-                <p className="text-[12px] text-text-muted mt-0.5">Invite, promote, or deactivate any account on the platform.</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-[12px] text-text-muted">
-                <span>Organization</span>
-                <select
-                  value={orgFilter}
-                  onChange={(e) => setOrgFilter(e.target.value)}
-                  className="px-2 py-1.5 bg-workspace border border-workspace-border rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-                >
-                  <option value="">All organizations</option>
-                  {organizations.map((org) => (
-                    <option key={org.id} value={org.id}>
-                      {org.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                onClick={() => {
-                  setShowInvite(true);
-                  setInviteError(null);
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors"
-              >
-                <UserPlus className="w-4 h-4" />
-                Invite user
-              </button>
-            </div>
-          </div>
 
           {issuedCredential && (
             <div className="bg-severity-safe-soft border border-severity-safe/30 rounded-xl p-4 flex items-start justify-between gap-4">
@@ -972,7 +852,36 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             </div>
           )}
 
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden">
+          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden shadow-xs">
+            <div className="px-4 py-3 border-b border-workspace-border flex items-center justify-between flex-wrap gap-3">
+              <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                All Users ({members.length})
+              </span>
+              <div className="flex items-center gap-2.5">
+                <select
+                  value={orgFilter}
+                  onChange={(e) => setOrgFilter(e.target.value)}
+                  className="px-2.5 py-1.5 bg-workspace border border-workspace-border rounded-lg text-xs text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/20"
+                >
+                  <option value="">All organizations</option>
+                  {organizations.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    setShowInvite(true);
+                    setInviteError(null);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand text-white text-xs font-medium hover:bg-brand-hover transition-colors"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  Invite user
+                </button>
+              </div>
+            </div>
             {membersLoading ? (
               <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading users...
