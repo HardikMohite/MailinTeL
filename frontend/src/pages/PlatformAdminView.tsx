@@ -20,6 +20,7 @@ import {
   Eye,
   Inbox,
   Flame,
+  Activity,
 } from 'lucide-react';
 import {
   listPlatformOrganizations,
@@ -128,7 +129,8 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
         100,
         undefined,
         emailQualFilter || undefined,
-        emailOrgFilter || undefined
+        emailOrgFilter || undefined,
+        true
       );
       setEmails(data.items || []);
     } catch (err) {
@@ -202,11 +204,17 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     loadMembers(orgFilter);
   }, [canAccess, orgFilter, loadMembers]);
 
-  // Phishing Emails Filtered View
+  // Phishing Emails Filtered View — strictly excludes safe / benign emails
+  const SAFE_STATUSES = useMemo(() => new Set(['NORMAL', 'SAFE', 'BENIGN']), []);
+
+  const phishingEmails = useMemo(() => {
+    return emails.filter((e) => !SAFE_STATUSES.has((e.qualification_status || '').toUpperCase()));
+  }, [emails, SAFE_STATUSES]);
+
   const filteredEmails = useMemo(() => {
     const q = emailSearch.toLowerCase().trim();
-    if (!q) return emails;
-    return emails.filter(
+    if (!q) return phishingEmails;
+    return phishingEmails.filter(
       (e) =>
         e.subject?.toLowerCase().includes(q) ||
         e.sender_address?.toLowerCase().includes(q) ||
@@ -214,18 +222,29 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
         e.sha256_hash?.toLowerCase().includes(q) ||
         e.original_filename?.toLowerCase().includes(q)
     );
-  }, [emails, emailSearch]);
+  }, [phishingEmails, emailSearch]);
 
-  // Email KPI metrics
+  // Email KPI metrics (Phishing & Threats only)
   const emailStats = useMemo(() => {
-    const total = emails.length;
-    const criticalOrHigh = emails.filter(
-      (e) => e.qualification_status === 'CRITICAL' || e.qualification_status === 'HIGH' || e.qualification_status === 'MALICIOUS'
+    const total = phishingEmails.length;
+    const criticalOrHigh = phishingEmails.filter(
+      (e) =>
+        e.qualification_status === 'CRITICAL' ||
+        e.qualification_status === 'HIGH' ||
+        e.qualification_status === 'MALICIOUS' ||
+        e.qualification_status === 'HIGH_RISK'
     ).length;
-    const suspicious = emails.filter((e) => e.qualification_status === 'SUSPICIOUS' || e.qualification_status === 'MEDIUM').length;
-    const normal = emails.filter((e) => e.qualification_status === 'NORMAL' || e.qualification_status === 'SAFE' || e.qualification_status === 'BENIGN').length;
-    return { total, criticalOrHigh, suspicious, normal };
-  }, [emails]);
+    const suspicious = phishingEmails.filter(
+      (e) => e.qualification_status === 'SUSPICIOUS' || e.qualification_status === 'MEDIUM'
+    ).length;
+    const investigating = phishingEmails.filter(
+      (e) =>
+        e.qualification_status === 'QUALIFIED_FOR_INVESTIGATION' ||
+        e.analysis_status === 'PENDING' ||
+        e.analysis_status === 'PROCESSING'
+    ).length;
+    return { total, criticalOrHigh, suspicious, investigating };
+  }, [phishingEmails]);
 
   const handleDownloadEml = async (email: EmailDetailResponse) => {
     if (!email.evidence_id) return;
@@ -378,7 +397,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             }`}
           >
             <Mail className="w-3.5 h-3.5" />
-            <span>All Phishing Emails ({emails.length})</span>
+            <span>All Phishing Emails ({emailStats.total})</span>
           </button>
           <button
             onClick={() => setActiveSection('organizations')}
@@ -423,11 +442,11 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
             <div className="bg-workspace-card border border-workspace-border rounded-xl p-4 shadow-xs">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-text-muted">Total Ingested</span>
+                <span className="text-xs font-semibold uppercase text-text-muted">Total Phishing Threats</span>
                 <Inbox className="w-4 h-4 text-brand" />
               </div>
               <div className="text-2xl font-bold text-text-primary mt-2">{emailStats.total}</div>
-              <div className="text-[11px] text-text-muted mt-1">Cross-tenant submissions</div>
+              <div className="text-[11px] text-text-muted mt-1">Cross-tenant threat queue</div>
             </div>
 
             <div className="bg-workspace-card border border-rose-200/80 rounded-xl p-4 shadow-xs">
@@ -448,13 +467,13 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
               <div className="text-[11px] text-amber-600/80 mt-1">Requires analyst triage</div>
             </div>
 
-            <div className="bg-workspace-card border border-emerald-200/80 rounded-xl p-4 shadow-xs">
+            <div className="bg-workspace-card border border-sky-200/80 rounded-xl p-4 shadow-xs">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-emerald-600">Normal / Benign</span>
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-semibold uppercase text-sky-600">Active Investigations</span>
+                <Activity className="w-4 h-4 text-sky-600" />
               </div>
-              <div className="text-2xl font-bold text-emerald-700 mt-2">{emailStats.normal}</div>
-              <div className="text-[11px] text-emerald-600/80 mt-1">Clean verified emails</div>
+              <div className="text-2xl font-bold text-sky-700 mt-2">{emailStats.investigating}</div>
+              <div className="text-[11px] text-sky-600/80 mt-1">Active forensic cases</div>
             </div>
           </div>
 
@@ -497,7 +516,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
                 <option value="CRITICAL">Critical Phishing</option>
                 <option value="HIGH">High Threat</option>
                 <option value="SUSPICIOUS">Suspicious</option>
-                <option value="NORMAL">Normal / Safe</option>
               </select>
             </div>
 
@@ -590,12 +608,12 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
                                   ? 'bg-rose-100 text-rose-800 border border-rose-200'
                                   : isSuspicious
                                   ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                  : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : 'bg-sky-100 text-sky-800 border border-sky-200'
                               }`}
                             >
                               <span
                                 className={`w-1.5 h-1.5 rounded-full ${
-                                  isHighThreat ? 'bg-rose-600' : isSuspicious ? 'bg-amber-600' : 'bg-emerald-600'
+                                  isHighThreat ? 'bg-rose-600' : isSuspicious ? 'bg-amber-600' : 'bg-sky-600'
                                 }`}
                               />
                               {email.qualification_status || 'UNQUALIFIED'}

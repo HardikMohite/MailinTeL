@@ -21,6 +21,8 @@ vi.mock('../services/api', async () => {
     invitePlatformUser: vi.fn(),
     updatePlatformUserRole: vi.fn(),
     deactivatePlatformUser: vi.fn(),
+    listEmails: vi.fn(),
+    getEvidenceDownloadUrl: vi.fn(),
   };
 });
 
@@ -50,6 +52,7 @@ beforeEach(() => {
   ]);
   vi.mocked(api.listPlatformUsers).mockResolvedValue([]);
   vi.mocked(api.listPlatformAuditLog).mockResolvedValue([]);
+  vi.mocked(api.listEmails).mockResolvedValue({ total: 0, items: [] });
 });
 
 describe('PlatformAdminView — access gating', () => {
@@ -96,5 +99,63 @@ describe('PlatformAdminView — invite role dropdown', () => {
     expect(optionValues).toContain('INSTITUTION_ADMIN');
     expect(optionValues).toContain('SECURITY_ANALYST');
     expect(optionValues).toContain('USER');
+  });
+});
+
+describe('PlatformAdminView — phishing-only triage queue', () => {
+  it('requests threat_only=true and strictly filters out safe/normal emails from the triage table', async () => {
+    mockAuthFor('SYSTEM_ADMIN');
+    vi.mocked(api.listEmails).mockResolvedValue({
+      total: 2,
+      items: [
+        {
+          id: 'email-1',
+          source_type: 'FILE_UPLOAD',
+          subject: 'Critical Phishing Wire Fraud',
+          sender_address: 'attacker@evil.com',
+          sender_display_name: 'Evil Boss',
+          analysis_status: 'COMPLETED',
+          qualification_status: 'CRITICAL',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as any,
+        {
+          id: 'email-2',
+          source_type: 'FILE_UPLOAD',
+          subject: 'Safe Monthly Newsletter',
+          sender_address: 'news@legit.com',
+          sender_display_name: 'Legit Team',
+          analysis_status: 'COMPLETED',
+          qualification_status: 'NORMAL',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as any,
+      ],
+    });
+
+    render(<PlatformAdminView />);
+
+    // Verify listEmails called with threatOnly = true (6th argument)
+    expect(api.listEmails).toHaveBeenCalledWith(0, 100, undefined, undefined, undefined, true);
+
+    // Threat email should be displayed
+    expect(await screen.findByText('Critical Phishing Wire Fraud')).toBeInTheDocument();
+
+    // Normal / safe email must NOT be displayed
+    expect(screen.queryByText('Safe Monthly Newsletter')).not.toBeInTheDocument();
+
+    // KPI cards must show threat-focused metrics and not "Normal / Benign"
+    expect(screen.getByText('Total Phishing Threats')).toBeInTheDocument();
+    expect(screen.getByText('Active Investigations')).toBeInTheDocument();
+    expect(screen.queryByText('Normal / Benign')).not.toBeInTheDocument();
+    expect(screen.queryByText('Clean verified emails')).not.toBeInTheDocument();
+
+    // Threat verdict filter select should not have "Normal / Safe"
+    const threatSelect = screen.getByDisplayValue('All Threat Verdicts') as HTMLSelectElement;
+    const optionValues = Array.from(threatSelect.options).map((o) => o.value);
+    expect(optionValues).not.toContain('NORMAL');
+    expect(optionValues).toContain('CRITICAL');
+    expect(optionValues).toContain('HIGH');
+    expect(optionValues).toContain('SUSPICIOUS');
   });
 });
