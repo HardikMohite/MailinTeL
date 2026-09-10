@@ -39,6 +39,7 @@ import { useApiErrorHandler } from '../hooks/useApiErrorHandler';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { ALL_ASSIGNABLE_ROLES, RoleCode } from '../constants/rbac';
 
+
 const ROLE_LABELS: Record<string, string> = {
   INSTITUTION_ADMIN: 'Institution Admin',
   SYSTEM_ADMIN: 'System Admin',
@@ -78,7 +79,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   const [emailQualFilter, setEmailQualFilter] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  // --- Organizations -------------------------------------------------
+  // --- Organizations (cached for cross-section filters) -------------
   const [organizations, setOrganizations] = useState<OrganizationItem[]>([]);
   const [orgsLoading, setOrgsLoading] = useState(true);
   const [orgsError, setOrgsError] = useState<string | null>(null);
@@ -230,6 +231,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
       </div>
     );
   }
+
 
 
   const handleInvite = async (e: React.FormEvent) => {

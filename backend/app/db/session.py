@@ -37,7 +37,7 @@ def get_engine_connect_args() -> Dict[str, Any]:
 
 from sqlalchemy.pool import NullPool
 
-# Determine engine pooling options
+# Determine engine pooling options: keep warm pooled connections alive, or use NullPool for transaction poolers
 _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,

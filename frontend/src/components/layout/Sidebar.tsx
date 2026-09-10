@@ -12,6 +12,8 @@ import {
   Settings,
   Users,
   UserCheck,
+  Building2,
+  ShieldCheck,
   ExternalLink,
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
@@ -37,6 +39,7 @@ export type NavTab =
   | 'reports'
   | 'team'
   | 'users'
+  | 'organization'
   | 'settings'
   | 'platform-admin';
 
@@ -72,6 +75,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           title: 'Admin Command',
           items: [
             { id: 'dashboard', label: 'Admin Dashboard', icon: LayoutDashboard },
+            { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
           ],
         },
         {
@@ -95,6 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           title: 'Governance & Access',
           items: [
             ...(canManageTeam ? [{ id: 'users' as const, label: 'User Panel', icon: Users }] : []),
+            { id: 'organization' as const, label: 'Organization', icon: Building2 },
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: UserCheck }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],
@@ -124,6 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
             { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
             { id: 'reports', label: 'Forensic Reports', icon: FileText },
             ...(canManageTeam ? [{ id: 'users' as const, label: 'User Panel', icon: Users }] : []),
+            ...(canManageTeam ? [{ id: 'organization' as const, label: 'Organization', icon: Building2 }] : []),
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: UserCheck }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],

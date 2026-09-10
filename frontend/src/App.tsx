@@ -13,6 +13,7 @@ import { ForensicReportView } from './components/reports/ForensicReportView';
 import { SettingsView } from './components/settings/SettingsView';
 import { TeamView } from './components/settings/TeamView';
 import { UserPanelView } from './components/users/UserPanelView';
+import { OrganizationView } from './components/settings/OrganizationView';
 import { PlatformAdminView } from './pages/PlatformAdminView';
 import { useAuth } from './context/AuthContext';
 import { checkHealth, checkDetailedHealth, HealthResponse, DetailedHealthResponse } from './services/api';
@@ -99,6 +100,7 @@ export const App: React.FC = () => {
     reports: { title: 'Reports', breadcrumb: ['MailinteL', 'Forensic Management'] },
     team: { title: 'Team & Access', breadcrumb: ['MailinteL', 'Forensic Management'] },
     users: { title: 'User Panel', breadcrumb: ['MailinteL', 'Governance & Access'] },
+    organization: { title: 'Organization', breadcrumb: ['MailinteL', 'Governance & Access'] },
     settings: { title: 'Settings', breadcrumb: ['MailinteL', 'Forensic Management'] },
     'platform-admin': { title: 'Platform Administration', breadcrumb: ['MailinteL', 'Platform Administration'] },
   };
@@ -208,6 +210,9 @@ export const App: React.FC = () => {
 
           {/* User Panel Tab */}
           {activeTab === 'users' && <UserPanelView />}
+
+          {/* Organization Tab */}
+          {activeTab === 'organization' && <OrganizationView />}
 
           {/* Platform Administration Tab */}
           {activeTab === 'platform-admin' && (
