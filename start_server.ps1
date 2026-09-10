@@ -34,14 +34,53 @@ Write-Host " Project Root: $RootDir" -ForegroundColor Gray
 Write-Host " Target Host:  http://${HostName}:${Port}" -ForegroundColor Gray
 Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
 
-# 1. Check Python Virtual Environment
-$VenvPython = Join-Path $RootDir "backend\venv\Scripts\python.exe"
-$VenvUvicorn = Join-Path $RootDir "backend\venv\Scripts\uvicorn.exe"
+# 1. Check Python Virtual Environment & Auto-Provision if Missing
+$VenvDir = Join-Path $RootDir "backend\venv"
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+$VenvUvicorn = Join-Path $VenvDir "Scripts\uvicorn.exe"
+$ReqFile = Join-Path $RootDir "backend\requirements.txt"
 
 if (-not (Test-Path $VenvPython)) {
-    Write-Host "[!] Virtual environment not found at backend\venv." -ForegroundColor Red
-    Write-Host "    Please ensure backend\venv is created and dependencies are installed." -ForegroundColor Yellow
-    exit 1
+    Write-Host ""
+    Write-Host "[*] Virtual environment not found. Creating at backend\venv..." -ForegroundColor Yellow
+    $SystemPython = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $SystemPython) {
+        $SystemPython = (Get-Command py -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $SystemPython) {
+        Write-Host "[!] Python executable not found in system PATH. Please install Python 3.11+." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "    [+] Initializing virtual environment using: $SystemPython..." -ForegroundColor Cyan
+    & $SystemPython -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPython)) {
+        Write-Host "[!] Failed to create virtual environment at backend\venv." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "    [+] Virtual environment created successfully." -ForegroundColor Green
+}
+
+# Verify Core Dependencies Installed (Uvicorn, FastAPI, SQLAlchemy, Alembic)
+$NeedsDeps = $false
+if (-not (Test-Path $VenvUvicorn)) {
+    $NeedsDeps = $true
+} else {
+    & $VenvPython -c "import fastapi, sqlalchemy, pydantic, alembic" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        $NeedsDeps = $true
+    }
+}
+
+if ($NeedsDeps) {
+    Write-Host ""
+    Write-Host "[*] Installing/updating backend dependencies from requirements.txt..." -ForegroundColor Yellow
+    Write-Host "    This may take 1-2 minutes on first initialization..." -ForegroundColor Gray
+    & $VenvPython -m pip install -r $ReqFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[!] Dependency installation failed. Please check network connectivity or requirements.txt." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "    [+] All backend dependencies successfully installed." -ForegroundColor Green
 }
 
 # 2. Check Environment Configuration File (.env)
@@ -127,6 +166,14 @@ if (Test-Path $MaxMindScript) {
 # 6. Optionally Launch Frontend in Concurrent Window
 $FrontendDir = Join-Path $RootDir "frontend"
 if ($WithFrontend -and (Test-Path $FrontendDir)) {
+    $NodeModules = Join-Path $FrontendDir "node_modules"
+    if (-not (Test-Path $NodeModules)) {
+        Write-Host ""
+        Write-Host "[*] Frontend dependencies not found. Installing via npm install..." -ForegroundColor Yellow
+        Push-Location $FrontendDir
+        npm install
+        Pop-Location
+    }
     Write-Host ""
     Write-Host "[+] Launching Vite Frontend in a concurrent window..." -ForegroundColor Magenta
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$FrontendDir'; Write-Host 'MailinteL Frontend Starting on http://localhost:5173...' -ForegroundColor Cyan; npm run dev"
