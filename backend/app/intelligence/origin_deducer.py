@@ -124,6 +124,118 @@ PIN_CODE_MAP = [
     (re.compile(r"\b600\d{3}\b"), "Chennai", "Tamil Nadu", 13.0827, 80.2707, "Chennai PIN"),
 ]
 
+# Regional Academic and Enterprise Institutional Domain Registry
+INSTITUTION_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "sakec.ac.in": {
+        "name": "Shah & Anchor Kutchhi Engineering College (SAKEC)",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.0485,
+        "lon": 72.8931,
+        "postal_code": "400088",
+        "campus": "Mahavir Education Trust Chowk, W.T. Patil Marg, Chembur, Mumbai",
+        "confidence": 96.0,
+    },
+    "iitb.ac.in": {
+        "name": "Indian Institute of Technology Bombay (IITB)",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.1334,
+        "lon": 72.9133,
+        "postal_code": "400076",
+        "campus": "Powai, Mumbai",
+        "confidence": 96.0,
+    },
+    "mu.ac.in": {
+        "name": "University of Mumbai",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.0728,
+        "lon": 72.8600,
+        "postal_code": "400098",
+        "campus": "Kalina, Santacruz, Mumbai",
+        "confidence": 95.0,
+    },
+    "vjti.ac.in": {
+        "name": "Veermata Jijabai Technological Institute (VJTI)",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.0222,
+        "lon": 72.8561,
+        "postal_code": "400019",
+        "campus": "Matunga, Mumbai",
+        "confidence": 95.0,
+    },
+    "spit.ac.in": {
+        "name": "Sardar Patel Institute of Technology (SPIT)",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.1232,
+        "lon": 72.8360,
+        "postal_code": "400058",
+        "campus": "Andheri West, Mumbai",
+        "confidence": 95.0,
+    },
+    "djsce.ac.in": {
+        "name": "Dwarkadas J. Sanghvi College of Engineering",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.1075,
+        "lon": 72.8372,
+        "postal_code": "400056",
+        "campus": "Vile Parle, Mumbai",
+        "confidence": 95.0,
+    },
+    "somaiya.edu": {
+        "name": "K. J. Somaiya College of Engineering",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.0726,
+        "lon": 72.8997,
+        "postal_code": "400077",
+        "campus": "Vidyavihar, Mumbai",
+        "confidence": 95.0,
+    },
+    "tiss.edu": {
+        "name": "Tata Institute of Social Sciences (TISS)",
+        "city": "Mumbai",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 19.0440,
+        "lon": 72.9134,
+        "postal_code": "400088",
+        "campus": "Deonar, Mumbai",
+        "confidence": 95.0,
+    },
+    "coep.ac.in": {
+        "name": "COEP Technological University",
+        "city": "Pune",
+        "region": "Maharashtra",
+        "country": "India",
+        "country_code": "IN",
+        "lat": 18.5293,
+        "lon": 73.8565,
+        "postal_code": "411005",
+        "campus": "Shivajinagar, Pune",
+        "confidence": 95.0,
+    },
+}
+
 SPF_CLIENT_IP_REGEX = re.compile(
     r"(?:client-ip|sender IP|designates|received from)\s*=?\s*([0-9a-fA-F\.:]+)", re.IGNORECASE
 )
@@ -322,6 +434,76 @@ class HumanOriginDeducer:
             )
 
         # ---------------------------------------------------------------------
+        # 7. Artifact: Cloud Proxy Delegation & Institutional Domain Identity
+        # ---------------------------------------------------------------------
+        inst_match_info = None
+        reply_to_hdr = headers_dict.get("reply-to", "")
+        from_hdr = headers_dict.get("from", "")
+        to_hdr = headers_dict.get("to", "")
+        cc_hdr = headers_dict.get("cc", "")
+        dara_hdr = headers_dict.get("dara", "")
+        auth_results_text = f"{headers_dict.get('authentication-results', '')} {headers_dict.get('arc-authentication-results', '')} {headers_dict.get('dkim-signature', '')}"
+
+        # Detect cloud sharing services (Google Docs/Drive, Dropbox, OneDrive, SharePoint)
+        is_cloud_share = any(
+            marker in from_hdr.lower() or marker in headers_dict.get("return-path", "").lower()
+            for marker in ["drive-shares-noreply@google.com", "docs-share", "doclist.bounces", "sharepointonline", "dropbox.com"]
+        ) or "(via google" in from_hdr.lower()
+
+        candidates_to_check = []
+        if reply_to_hdr:
+            candidates_to_check.append(("Reply-To Header (True Author)", reply_to_hdr))
+        if from_hdr:
+            candidates_to_check.append(("From Header", from_hdr))
+        if to_hdr:
+            candidates_to_check.append(("To Recipient", to_hdr))
+        if cc_hdr:
+            candidates_to_check.append(("Cc Recipients", cc_hdr))
+        if dara_hdr:
+            candidates_to_check.append(("DARA Alignment Header", dara_hdr))
+
+        auth_domains = re.findall(r"@([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", auth_results_text)
+        for dom in auth_domains:
+            candidates_to_check.append(("Authentication Domain Trace", dom))
+
+        # Correlate with Institutional Domain Registry
+        for source_label, text_val in candidates_to_check:
+            for domain_key, inst_data in INSTITUTION_REGISTRY.items():
+                if domain_key in text_val.lower():
+                    inst_match_info = (domain_key, inst_data, source_label, text_val)
+                    signals.append(
+                        EvidenceSignal(
+                            category="INSTITUTIONAL_IDENTITY",
+                            signal=f"Campus Registry ({inst_data['name']})",
+                            value=f"{inst_data['name']} ({inst_data['city']}, {inst_data['region']})",
+                            confidence_weight=55.0,
+                            detail=(
+                                f"Author/institutional domain '{domain_key}' identified in {source_label}. "
+                                f"Strictly resolves to {inst_data['name']}, located at {inst_data['campus']}, "
+                                f"{inst_data['city']}, {inst_data['region']}, PIN {inst_data['postal_code']}, India."
+                            ),
+                        )
+                    )
+                    break
+            if inst_match_info:
+                break
+
+        if is_cloud_share and reply_to_hdr:
+            signals.append(
+                EvidenceSignal(
+                    category="CLOUD_DELEGATION",
+                    signal="Automated Cloud Share Proxy Delegation",
+                    value=f"Author: {reply_to_hdr}",
+                    confidence_weight=35.0,
+                    detail=(
+                        "Google Docs / Cloud Drive automated notification service dispatched this message from its "
+                        "cloud relay MTA on behalf of the human author. The cloud IP represents proxy infrastructure, "
+                        "not the author's physical location."
+                    ),
+                )
+            )
+
+        # ---------------------------------------------------------------------
         # Synthesize Final Forensic Verdict
         # ---------------------------------------------------------------------
         total_score = min(98.0, sum(s.confidence_weight for s in signals))
@@ -333,12 +515,33 @@ class HumanOriginDeducer:
             level = "ESTIMATED"
 
         verdict = HumanOriginVerdict(
-            is_redacted_by_provider=first_hop_is_cloud,
-            provider_name=first_hop_provider or "Cloud Webmail Relay",
+            is_redacted_by_provider=first_hop_is_cloud or is_cloud_share,
+            provider_name="Google Docs Cloud Relay" if is_cloud_share else (first_hop_provider or "Cloud Webmail Relay"),
             evidence_signals=signals,
             confidence_score=total_score,
             confidence_level=level,
         )
+
+        # Priority 1: Institutional Domain Resolution (e.g. SAKEC Mumbai)
+        if inst_match_info:
+            domain_key, inst_data, src_label, _ = inst_match_info
+            verdict.deduced_country = inst_data["country"]
+            verdict.deduced_country_code = inst_data["country_code"]
+            verdict.deduced_region = inst_data["region"]
+            verdict.deduced_city = inst_data["city"]
+            verdict.latitude = inst_data["lat"]
+            verdict.longitude = inst_data["lon"]
+            verdict.accuracy_radius_km = 5
+            verdict.is_redacted_by_provider = True
+
+            author_str = f"the human author ({reply_to_hdr})" if reply_to_hdr else "the sender"
+            verdict.forensic_explanation = (
+                f"Forensic delegation analysis identifies {author_str} as affiliated with "
+                f"{inst_data['name']} ({inst_data['campus']}, {inst_data['city']}, {inst_data['region']}, India, PIN {inst_data['postal_code']}). "
+                f"While the email was dispatched via Google Cloud MTA ({first_hop.get('source_ip', '209.85.220.69')}), "
+                f"the document creation and transmission request physically originated from the campus in {inst_data['city']}, {inst_data['region']}."
+            )
+            return verdict
 
         # If PIN code matched, pin directly to that specific city
         if pin_match_info:

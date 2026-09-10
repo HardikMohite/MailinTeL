@@ -193,12 +193,20 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
     if (!emailId) return;
     setLoading(true);
     setError(null);
-    setSelectedMarker(null);
     try {
       const data = await getEmailGeoInfrastructure(emailId);
       setEmailGeo(data);
+      const humanNode = data.markers?.find((m) => m.role === 'DEDUCED_HUMAN_ORIGIN' || m.id === 'marker-deduced-human-origin');
+      if (humanNode) {
+        setSelectedMarker(humanNode);
+      } else if (data.markers && data.markers.length > 0) {
+        setSelectedMarker(data.markers[0]);
+      } else {
+        setSelectedMarker(null);
+      }
     } catch (err: any) {
       setError(err.message || 'Could not load geographic infrastructure for this email.');
+      setSelectedMarker(null);
     } finally {
       setLoading(false);
     }

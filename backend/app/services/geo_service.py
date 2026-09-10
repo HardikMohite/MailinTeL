@@ -329,7 +329,7 @@ class GeolocationService:
                         "to_ip": first_relay["source_ip"],
                         "from_coords": [deduced_verdict.latitude, deduced_verdict.longitude],
                         "to_coords": [first_relay["geolocation"]["latitude"], first_relay["geolocation"]["longitude"]],
-                        "label": f"Human Author ({deduced_verdict.deduced_city}) ⇢ Ingest Relay ({first_relay['source_ip']})",
+                        "label": f"Human Author ({deduced_verdict.deduced_city}) -> Ingest Relay ({first_relay['source_ip']})",
                         "is_inferred": True,
                     })
 
