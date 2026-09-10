@@ -602,7 +602,7 @@ class GeolocationService:
         email_ids = recent_emails_res.scalars().all()
 
         if not email_ids:
-            return {
+            empty_res = {
                 "total_emails_scanned": 0,
                 "total_markers": 0,
                 "tor_node_count": 0,
@@ -613,6 +613,12 @@ class GeolocationService:
                 "country_distribution": {},
                 "attribution_disclaimer": ATTRIBUTION_DISCLAIMER,
             }
+            _GEO_GLOBAL_CACHE[key] = (now, empty_res)
+            try:
+                await redis_manager.set_json(f"cache:geo:global:{key}", empty_res, expire_seconds=600)
+            except Exception:
+                pass
+            return empty_res
 
         hops_stmt = select(RelayHop).where(RelayHop.email_id.in_(email_ids))
         hops_res = await session.execute(hops_stmt)
