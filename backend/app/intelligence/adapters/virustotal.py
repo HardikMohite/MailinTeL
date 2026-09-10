@@ -55,7 +55,12 @@ class VirusTotalAdapter(BaseThreatIntelAdapter):
             threat_score = min(100.0, 50.0 + (malicious * 5.0))
             confidence = min(0.98, 0.70 + (malicious * 0.03))
             tags.append("MULTIPLE_ENGINE_DETECTIONS")
-        elif malicious >= 1 or suspicious >= 2:
+        elif harmless >= 10 and malicious <= 1 and suspicious <= 2:
+            # Overwhelming harmless consensus from major vendors (e.g. 70+ harmless, only 1 noisy outlier)
+            verdict = "BENIGN"
+            threat_score = 0.0
+            confidence = 0.90
+        elif (malicious >= 2) or (suspicious >= 3) or (malicious == 1 and harmless < 5):
             verdict = "SUSPICIOUS"
             threat_score = min(60.0, 30.0 + ((malicious + suspicious) * 10.0))
             confidence = 0.65

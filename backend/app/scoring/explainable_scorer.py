@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Set, Tuple
 from dataclasses import dataclass, field
+from app.parser.header_analyzer import get_organizational_domain
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,16 @@ class ExplainableScoringEngine:
         "bit.ly", "t.co", "tinyurl.com", "goo.gl", "ow.ly", "is.gd",
         "cutt.ly", "rb.gy", "shorturl.at", "tiny.cc", "buff.ly", "lnkd.in",
         "soo.gd", "s.id", "clck.ru", "rebrand.ly", "bl.ink",
+    }
+
+    # Verified collaborative notification services where Reply-To delegates to the sharing user
+    _TRUSTED_COLLABORATIVE_DOMAINS = {
+        "google.com", "docs.google.com", "drive.google.com",
+        "microsoft.com", "sharepointonline.com", "onedrive.com", "office.com", "office365.com",
+        "github.com", "gitlab.com",
+        "dropbox.com", "docusign.net", "docusign.com",
+        "atlassian.net", "jira.com", "trello.com",
+        "slack.com", "figma.com", "canva.com", "zoom.us",
     }
 
     @staticmethod
@@ -188,23 +199,63 @@ class ExplainableScoringEngine:
             pillar_auth_score += 25.0
             spoofed_signals += 1
 
-        # Inconsistent Reply-To vs Sender Address
+        # Reply-To vs Sender Address evaluation
+        is_collaborative_platform = False
         if reply_to and sender_address and reply_domain and sender_domain and (reply_domain != sender_domain):
-            findings.append(
-                ForensicFindingData(
-                    finding_type="IDENTITY_REPLY_TO_MISMATCH",
-                    severity="HIGH",
-                    confidence=0.92,
-                    title=f"Inconsistent Reply-To and Sender Address",
-                    description=(
-                        f"Sender address domain is '{sender_domain}' but Reply-To redirects responses to '{reply_domain}' ({reply_to}). "
-                        f"Mismatched return channels are frequently utilized in phishing and BEC lures to capture responses on unauthenticated drop boxes."
-                    ),
-                    evidence={"sender_address": sender_address, "reply_to": reply_to},
-                )
+            sender_root = get_organizational_domain(sender_domain) or sender_domain
+            is_collaborative_platform = (
+                sender_domain in self._TRUSTED_COLLABORATIVE_DOMAINS
+                or sender_root in self._TRUSTED_COLLABORATIVE_DOMAINS
             )
-            pillar_auth_score += 30.0
-            spoofed_signals += 1
+
+            if is_collaborative_platform and (dkim_verdict == "PASS" or from_align == "PASS" or spf_verdict == "PASS"):
+                # Authenticated collaborative SaaS platform (e.g. Google Drive/Docs, SharePoint, GitHub, Dropbox)
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="IDENTITY_COLLABORATION_REPLY_ROUTING",
+                        severity="INFO",
+                        confidence=0.95,
+                        title="Authenticated Collaboration Reply Routing",
+                        description=(
+                            f"Sender is a verified collaboration service ('{sender_domain}') with passing authentication. "
+                            f"Reply-To is delegated to collaborator '{reply_to}' as expected."
+                        ),
+                        evidence={"sender_address": sender_address, "reply_to": reply_to},
+                    )
+                )
+            elif dkim_verdict == "PASS" and spf_verdict == "PASS" and from_align == "PASS":
+                # Fully authenticated domain with an alternative reply address (e.g. support desk, newsletter, automated ticketing)
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="IDENTITY_REPLY_TO_ALTERNATIVE",
+                        severity="LOW",
+                        confidence=0.75,
+                        title="Alternative Reply-To Address on Authenticated Email",
+                        description=(
+                            f"Sender domain '{sender_domain}' passed authentication checks (SPF/DKIM/DMARC), but specifies an alternative reply address on '{reply_domain}'. "
+                            f"Common in customer service desks, newsletters, and automated workflows."
+                        ),
+                        evidence={"sender_address": sender_address, "reply_to": reply_to},
+                    )
+                )
+                pillar_auth_score += 5.0
+            else:
+                # Unauthenticated or mismatched authentication with divergent return channel -> High risk BEC
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="IDENTITY_REPLY_TO_MISMATCH",
+                        severity="HIGH",
+                        confidence=0.92,
+                        title="Inconsistent Reply-To and Sender Address",
+                        description=(
+                            f"Sender address domain is '{sender_domain}' but Reply-To redirects responses to '{reply_domain}' ({reply_to}). "
+                            f"Mismatched return channels are frequently utilized in phishing and BEC lures to capture responses on unauthenticated drop boxes."
+                        ),
+                        evidence={"sender_address": sender_address, "reply_to": reply_to},
+                    )
+                )
+                pillar_auth_score += 30.0
+                spoofed_signals += 1
 
         # Inconsistent Return-Path vs From Address
         if return_path_domain and sender_domain and return_path_domain != sender_domain and from_align != "PASS":
@@ -220,17 +271,19 @@ class ExplainableScoringEngine:
             )
             pillar_auth_score += 15.0
 
-        if dkim_verdict == "PASS" and spf_verdict == "PASS" and from_align == "PASS" and not (reply_domain and reply_domain != sender_domain):
-            findings.append(
-                ForensicFindingData(
-                    finding_type="AUTH_AUTHENTICATION_PASSED",
-                    severity="INFO",
-                    confidence=0.98,
-                    title="Email Authentication Fully Aligned",
-                    description="SPF, DKIM, and DMARC cryptographic checks passed and aligned with From header.",
-                    evidence={"spf": spf_verdict, "dkim": dkim_verdict, "dmarc": dmarc_verdict},
+        if dkim_verdict == "PASS" and spf_verdict == "PASS" and from_align == "PASS":
+            # Allow full authentication award when collaborative platform or passing auth
+            if not (reply_domain and reply_domain != sender_domain and not is_collaborative_platform and dkim_verdict != "PASS"):
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="AUTH_AUTHENTICATION_PASSED",
+                        severity="INFO",
+                        confidence=0.98,
+                        title="Email Authentication Fully Aligned",
+                        description="SPF, DKIM, and DMARC cryptographic checks passed and aligned with From header.",
+                        evidence={"spf": spf_verdict, "dkim": dkim_verdict, "dmarc": dmarc_verdict},
+                    )
                 )
-            )
 
         # ---------------------------------------------------------
         # PILLAR 2: Routing Infrastructure & Relay Telemetry (Max 40)
@@ -605,26 +658,30 @@ class ExplainableScoringEngine:
             pillar_social_score += 20.0
             spoofed_signals += 1
 
-        # Sender domain vs URL domain mismatch
+        # Sender domain vs URL domain mismatch (comparing organizational root domains)
+        sender_root_domain = get_organizational_domain(sender_domain) or sender_domain
         url_domains_in_email: Set[str] = set()
         for u_obj in urls:
             ud = (u_obj.get("domain") or "").lower()
             if ud:
                 url_domains_in_email.add(ud)
-        # Remove sender's own domain and common benign domains
+
+        # Determine root domains of all URLs in email
+        url_root_domains = {get_organizational_domain(d) or d for d in url_domains_in_email}
         benign_url_domains = {"google.com", "microsoft.com", "apple.com", "github.com", "outlook.com", "office.com", "windows.net"}
-        suspicious_url_domains = url_domains_in_email - benign_url_domains - {sender_domain}
-        if sender_domain and suspicious_url_domains and url_domains_in_email:
-            # Only flag if ALL URL domains are external to sender
-            if sender_domain not in url_domains_in_email:
+        suspicious_url_roots = url_root_domains - benign_url_domains - {sender_domain, sender_root_domain}
+
+        if sender_root_domain and suspicious_url_roots and url_root_domains:
+            # Only flag if NO URL matches sender's domain or organizational root domain
+            if sender_root_domain not in url_root_domains and sender_domain not in url_domains_in_email:
                 findings.append(
                     ForensicFindingData(
                         finding_type="SOCIAL_SENDER_URL_DOMAIN_MISMATCH",
                         severity="MEDIUM",
                         confidence=0.80,
                         title="Sender Domain Does Not Match Any URL Domains",
-                        description=f"Email from '{sender_domain}' contains links exclusively to unrelated domains: {', '.join(list(suspicious_url_domains)[:3])}. This pattern is common in credential harvesting.",
-                        evidence={"sender_domain": sender_domain, "url_domains": sorted(list(suspicious_url_domains))[:5]},
+                        description=f"Email from '{sender_domain}' contains links exclusively to unrelated domains: {', '.join(list(suspicious_url_roots)[:3])}. This pattern is common in credential harvesting.",
+                        evidence={"sender_domain": sender_domain, "url_domains": sorted(list(suspicious_url_roots))[:5]},
                     )
                 )
                 pillar_social_score += 10.0

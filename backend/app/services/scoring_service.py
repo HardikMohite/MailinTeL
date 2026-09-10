@@ -76,8 +76,8 @@ async def execute_email_analysis_and_scoring(
             "filename": ev.original_filename,
             "sha256_hash": ev.sha256_hash,
             "size_bytes": ev.size_bytes,
-            "is_dangerous": bool(ev.metadata_json and ev.metadata_json.get("is_dangerous")),
-            "extension": (ev.metadata_json.get("extension") if ev.metadata_json else ""),
+            "is_dangerous": bool(getattr(ev, "metadata_json", None) and ev.metadata_json.get("is_dangerous")),
+            "extension": ("." + ev.original_filename.rsplit(".", 1)[-1].lower() if "." in ev.original_filename else ""),
         }
         for ev in evidence_objs
     ]

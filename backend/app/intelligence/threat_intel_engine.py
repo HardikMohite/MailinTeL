@@ -9,8 +9,18 @@ from app.intelligence.adapters.virustotal import VirusTotalAdapter
 from app.intelligence.adapters.abuseipdb import AbuseIPDBAdapter
 from app.intelligence.adapters.urlhaus import URLHausAdapter
 from app.intelligence.adapters.internal_reputation import InternalReputationAdapter
+from app.parser.header_analyzer import get_organizational_domain
 
 logger = logging.getLogger(__name__)
+
+MAJOR_TRUSTED_ROOT_DOMAINS = {
+    "google.com", "gmail.com", "googleapis.com", "googleusercontent.com", "1e100.net", "gstatic.com",
+    "microsoft.com", "office.com", "office365.com", "outlook.com", "live.com", "microsoftonline.com", "windows.net", "sharepoint.com", "sharepointonline.com",
+    "apple.com", "icloud.com",
+    "amazon.com", "amazonaws.com",
+    "cloudflare.com", "github.com", "gitlab.com", "dropbox.com", "zoom.us", "slack.com",
+    "sakec.ac.in",
+}
 
 
 @dataclass
@@ -66,6 +76,35 @@ class ThreatIntelEngine:
         """
         clean_type = indicator_type.strip().upper()
         clean_val = indicator_value.strip()
+
+        # Guard: Major trusted domains and mail provider infrastructure are benign by consensus
+        if clean_type == "DOMAIN":
+            root_d = get_organizational_domain(clean_val) or clean_val
+            if clean_val.lower() in MAJOR_TRUSTED_ROOT_DOMAINS or root_d.lower() in MAJOR_TRUSTED_ROOT_DOMAINS:
+                return AggregatedThreatIntel(
+                    indicator_type="DOMAIN",
+                    indicator_value=clean_val,
+                    consensus_verdict="BENIGN",
+                    consensus_threat_score=0.0,
+                    consensus_confidence=0.99,
+                    aggregated_tags=["MAJOR_TRUSTED_INFRASTRUCTURE"],
+                    provider_reports=[],
+                    provider_count=1,
+                )
+
+        if clean_type == "IP":
+            # Check for known Google mail relays (AS15169 e.g. 209.85.x.x) and major DNS/CDNs
+            if clean_val.startswith(("209.85.128.", "209.85.160.", "209.85.216.", "209.85.220.", "209.85.222.", "209.85.223.", "74.125.", "173.194.", "172.217.", "142.250.", "142.251.")):
+                return AggregatedThreatIntel(
+                    indicator_type="IP",
+                    indicator_value=clean_val,
+                    consensus_verdict="BENIGN",
+                    consensus_threat_score=0.0,
+                    consensus_confidence=0.99,
+                    aggregated_tags=["GOOGLE_MAIL_INFRASTRUCTURE"],
+                    provider_reports=[],
+                    provider_count=1,
+                )
 
         tasks = []
         for adapter in self.adapters:

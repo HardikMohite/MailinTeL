@@ -66,6 +66,37 @@ def test_scoring_benign_authenticated_email():
     assert any(f.finding_type == "AUTH_AUTHENTICATION_PASSED" for f in result.findings)
 
 
+def test_scoring_google_docs_collaborative_share_benign():
+    """Verify that Google Docs / Drive sharing emails with Reply-To to a user are recognized as BENIGN with 0 risk score."""
+    engine = ExplainableScoringEngine()
+    result = engine.evaluate_email(
+        email_metadata={
+            "sender_address": "drive-shares-noreply@google.com",
+            "reply_to": "chaitanya.mundhe24@sakec.ac.in",
+            "subject": "TYCS_30_CSE_EXP-02.docx",
+        },
+        auth_results={
+            "spf_verdict": "PASS",
+            "spf_domain": "google.com",
+            "dkim_verdict": "PASS",
+            "dmarc_verdict": "PASS",
+            "from_domain_aligned": "PASS",
+            "reply_to": "chaitanya.mundhe24@sakec.ac.in",
+        },
+        relay_hops=[{"hop_index": 1, "source_host": "mail-sor-f69.google.com", "delay_seconds": 1}],
+        artifacts={"urls": [{"url": "https://docs.google.com/document/d/xyz", "domain": "docs.google.com"}], "attachments": []},
+        domain_intel=[{"domain": "google.com", "risk_tags": []}],
+        infrastructure_intel=[],
+        threat_intel={"total_iocs_analyzed": 1, "indicators": []},
+    )
+
+    assert result.threat_classification == "BENIGN"
+    assert result.threat_risk_score == 0.0
+    assert any(f.finding_type == "IDENTITY_COLLABORATION_REPLY_ROUTING" for f in result.findings)
+    assert not any(f.finding_type == "IDENTITY_REPLY_TO_MISMATCH" for f in result.findings)
+    assert any(f.finding_type == "AUTH_AUTHENTICATION_PASSED" for f in result.findings)
+
+
 def test_scoring_phishing_spoofed_email():
     engine = ExplainableScoringEngine()
     result = engine.evaluate_email(
