@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing %s in %s mode...", settings.APP_NAME, settings.APP_ENV)
 
     # Check Database Connection on startup (allow realistic latency for remote cloud pooler)
-    db_status = await check_db_connectivity(timeout_seconds=8.0)
+    db_status = await check_db_connectivity(timeout_seconds=15.0)
     if db_status["connected"]:
         logger.info("Database connection established (latency: %sms)", db_status["latency_ms"])
         # Auto-provision initial administrator account if configured via .env

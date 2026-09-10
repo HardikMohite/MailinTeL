@@ -22,6 +22,9 @@ def rate_limiter(*, key_prefix: str, max_requests: int, window_seconds: int):
     """
 
     async def _dependency(request: Request) -> None:
+        if not redis_manager.is_available:
+            return
+
         client_ip = request.client.host if request.client else "unknown"
         # Respect a trusted reverse-proxy header if present (set X-Forwarded-For
         # only from your own load balancer/ingress — never trust it from the public
@@ -48,6 +51,7 @@ def rate_limiter(*, key_prefix: str, max_requests: int, window_seconds: int):
         except Exception as e:
             # Redis unavailable — fail open but log, so an outage is visible rather
             # than silently disabling protection forever.
+            redis_manager.mark_unavailable()
             logger.error("Rate limiter backend unavailable (%s) - failing open for %s", e, key_prefix)
 
     return _dependency

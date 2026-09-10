@@ -34,6 +34,17 @@ class RedisManager:
         self._cooldown_seconds: float = 15.0
 
     @property
+    def is_available(self) -> bool:
+        now = time.time()
+        if not self._is_available and (now - self._last_checked_time) < self._cooldown_seconds:
+            return False
+        return self._is_available
+
+    def mark_unavailable(self) -> None:
+        self._is_available = False
+        self._last_checked_time = time.time()
+
+    @property
     def client(self) -> Redis:
         if self._client is None:
             url = settings.REDIS_URL
@@ -44,9 +55,9 @@ class RedisManager:
             self._client = aioredis.from_url(
                 url,
                 decode_responses=True,
-                socket_timeout=5.0,
-                socket_connect_timeout=5.0,
-                retry_on_timeout=True,
+                socket_timeout=1.5,
+                socket_connect_timeout=1.5,
+                retry_on_timeout=False,
             )
         return self._client
 

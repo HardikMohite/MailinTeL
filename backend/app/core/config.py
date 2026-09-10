@@ -12,7 +12,7 @@ logger = logging.getLogger("mailintel.config")
 # Find root directory containing .env
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 ROOT_DIR = BASE_DIR.parent
-ENV_PATH = ROOT_DIR / ".env" if (ROOT_DIR / ".env").exists() else BASE_DIR / ".env"
+ENV_PATH = BASE_DIR / ".env" if (BASE_DIR / ".env").exists() else ROOT_DIR / ".env"
 
 # Well-known insecure defaults — used ONLY to detect misconfiguration in non-dev
 # environments. Includes every placeholder value that has shipped in this repo's
