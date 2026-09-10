@@ -291,6 +291,18 @@ class CampaignCorrelationService:
             if email_org_id is not None and email_org_id != organization_id:
                 raise ValueError(f"Email {email_id} not found.")
 
+        # Ensure benign emails cannot be added to adversary attack campaigns
+        threat_check_res = await session.execute(
+            select(EmailAnalysis.threat_classification, EmailAnalysis.threat_risk_score, Email.qualification_status)
+            .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
+            .where(Email.id == email_id)
+        )
+        t_row = threat_check_res.first()
+        if t_row:
+            t_cls, t_score, t_qual = t_row[0], t_row[1], t_row[2]
+            if t_cls == "BENIGN" and (t_score is None or float(t_score) < 40.0) and t_qual not in ("SUSPICIOUS", "MALICIOUS", "CAMPAIGN_RELATED", "QUALIFIED_FOR_INVESTIGATION"):
+                raise ValueError(f"Email {email_id} is benign and cannot be added to a threat campaign.")
+
         # Check existing membership
         m_res = await session.execute(
             select(CampaignMembership).where(
@@ -391,18 +403,40 @@ class CampaignCorrelationService:
                 EmailSource.user_id,
                 User.full_name,
                 User.email,
+                EmailAnalysis.threat_classification,
+                EmailAnalysis.threat_risk_score,
             )
             .join(Email, Email.id == CampaignMembership.email_id)
             .outerjoin(EmailSource, Email.source_id == EmailSource.id)
             .outerjoin(User, EmailSource.user_id == User.id)
+            .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
             .where(CampaignMembership.campaign_id == campaign_id)
         )
         memberships_data = []
         member_email_ids: List[uuid.UUID] = []
         real_dates: List[datetime] = []
         reporting_users_map: Dict[str, Dict[str, Any]] = {}
+        seen_email_ids: Set[uuid.UUID] = set()
 
-        for m, subj, sender, sent_at, recvd_at, created_at, qual, astatus, uploader_id, uploader_name, uploader_email in m_res.all():
+        for row in m_res.all():
+            m = row[0]
+            if m.email_id in seen_email_ids:
+                continue
+            subj = row[1]
+            sender = row[2]
+            sent_at = row[3]
+            recvd_at = row[4]
+            created_at = row[5]
+            qual = row[6]
+            astatus = row[7]
+            uploader_id = row[8]
+            uploader_name = row[9]
+            uploader_email = row[10]
+            threat_cls = row[11] if len(row) > 11 else None
+            risk_score = row[12] if len(row) > 12 else None
+            if threat_cls == "BENIGN" and (risk_score is None or float(risk_score) < 40.0) and qual not in ("SUSPICIOUS", "MALICIOUS", "CAMPAIGN_RELATED", "QUALIFIED_FOR_INVESTIGATION"):
+                continue
+            seen_email_ids.add(m.email_id)
             member_email_ids.append(m.email_id)
             dt = sent_at or recvd_at or created_at
             if dt:
@@ -471,10 +505,15 @@ class CampaignCorrelationService:
             )
             recip_res = await session.execute(recip_stmt)
             targeted_map: Dict[str, Dict[str, Any]] = {}
+            seen_victim_emails: Set[tuple] = set()
             for addr, dname, eid, subj, sender, sent_at, qual, astatus, created_at, reg_uid, reg_uname, uploader_id, uploader_name, uploader_email in recip_res.all():
                 if not addr:
                     continue
                 norm = addr.strip().lower()
+                key = (norm, str(eid))
+                if key in seen_victim_emails:
+                    continue
+                seen_victim_emails.add(key)
                 if norm not in targeted_map:
                     effective_display_name = dname or reg_uname or None
                     targeted_map[norm] = {
@@ -921,12 +960,45 @@ class CampaignCorrelationService:
 
             if len(cluster_members) >= 2:
                 top_reason = primary_reasons[0] if primary_reasons else "Multi-signal Correlation"
-                camp_name = f"Cluster: {top_reason[:40]}"
+                
+                # Derive a recognizable, relatable campaign name from cluster emails
+                rep_subj = None
+                try:
+                    sub_stmt = (
+                        select(Email.subject)
+                        .where(Email.id.in_(list(cluster_members)), Email.subject.is_not(None))
+                        .limit(1)
+                    )
+                    sub_res = await session.execute(sub_stmt)
+                    rep_subj = sub_res.scalar_one_or_none()
+                except Exception:
+                    rep_subj = None
+
+                if rep_subj:
+                    import re
+                    clean_subj = re.sub(r'^(re|fwd|fw):\s*', '', rep_subj, flags=re.I).strip()
+                    clean_subj = clean_subj[:65].strip()
+                    camp_name = f"Campaign: {clean_subj}"
+                else:
+                    camp_name = f"Cluster: {top_reason}"
+
+                target_org_id = organization_id
+                if target_org_id is None:
+                    org_stmt = (
+                        select(EmailSource.organization_id)
+                        .join(Email, Email.source_id == EmailSource.id)
+                        .where(Email.id.in_(list(cluster_members)), EmailSource.organization_id.is_not(None))
+                        .limit(1)
+                    )
+                    org_res = await session.execute(org_stmt)
+                    org_row = org_res.first()
+                    if org_row:
+                        target_org_id = org_row[0]
 
                 camp_query = select(Campaign).where(Campaign.campaign_name == camp_name)
-                if organization_id is not None:
+                if target_org_id is not None:
                     camp_query = camp_query.where(
-                        or_(Campaign.organization_id.is_(None), Campaign.organization_id == organization_id)
+                        or_(Campaign.organization_id.is_(None), Campaign.organization_id == target_org_id)
                     )
                 existing_res = await session.execute(camp_query)
                 existing_camp = existing_res.scalar_one_or_none()
@@ -938,7 +1010,7 @@ class CampaignCorrelationService:
                             campaign_id=existing_camp.id,
                             email_id=mid,
                             membership_confidence=75.0,
-                            organization_id=organization_id,
+                            organization_id=target_org_id,
                         )
                     created_campaigns.append({
                         "campaign_id": str(existing_camp.id),
@@ -954,7 +1026,7 @@ class CampaignCorrelationService:
                     threat_summary=f"Automated cluster identified with {len(cluster_members)} emails linked by {top_reason}.",
                     campaign_confidence=75.0,
                     initial_email_ids=list(cluster_members),
-                    organization_id=organization_id,
+                    organization_id=target_org_id,
                 )
                 
                 ev = CampaignEvidence(
