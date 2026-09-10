@@ -178,12 +178,12 @@ if (-not $SkipMigrations) {
     Write-Host "[Step 2/4] Skipping database migrations (-SkipMigrations enabled)." -ForegroundColor Yellow
 }
 
-# 5. MaxMind GeoIP / ASN Check
+# 5. MaxMind GeoIP / ASN Check & Auto-Deployment
 Write-Host ""
-Write-Host "[Step 3/4] Verifying MaxMind Intelligence and Storage..." -ForegroundColor Green
+Write-Host "[Step 3/4] Verifying & Deploying MaxMind GeoLite2 (City & ASN)..." -ForegroundColor Green
 $MaxMindScript = Join-Path $RootDir "backend\scripts\setup_maxmind.py"
 if (Test-Path $MaxMindScript) {
-    & $VenvPython $MaxMindScript
+    & $VenvPython $MaxMindScript --download
 }
 
 # 6. Optionally Launch Frontend in Concurrent Window

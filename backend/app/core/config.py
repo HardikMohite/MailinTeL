@@ -140,6 +140,8 @@ class Settings(BaseSettings):
 
     # External Provider Keys & Intelligence Settings
     MAXMIND_GEOIP_DB_PATH: Optional[str] = None
+    MAXMIND_LICENSE_KEY: Optional[str] = None
+    MAXMIND_AUTO_DOWNLOAD: bool = True
     VIRUSTOTAL_API_KEY: Optional[str] = None
     ABUSEIPDB_API_KEY: Optional[str] = None
     IP_INTEL_CACHE_TTL_SECONDS: int = 86400
