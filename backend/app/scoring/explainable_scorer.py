@@ -78,6 +78,17 @@ class ExplainableScoringEngine:
         "soo.gd", "s.id", "clck.ru", "rebrand.ly", "bl.ink",
     }
 
+    # Known legitimate collaborative platforms, document sharing, and notification services
+    _KNOWN_COLLABORATION_PLATFORMS = {
+        "google.com", "gmail.com", "docs.google.com", "drive.google.com",
+        "github.com", "gitlab.com", "dropbox.com", "box.com", "slack.com",
+        "atlassian.net", "jira.com", "docusign.net", "docusign.com",
+        "salesforce.com", "microsoft.com", "office.com", "notion.so",
+        "figma.com", "zoom.us", "calendly.com", "brevosend.com", "sendinblue.com",
+        "sakec.ac.in",
+    }
+
+
     @staticmethod
     def _extract_domain(address: Optional[str]) -> str:
         if not address or "@" not in address:
@@ -114,8 +125,8 @@ class ExplainableScoringEngine:
         threat_intel = threat_intel or {}
 
         sender_address = email_metadata.get("sender_address") or ""
-        reply_to = email_metadata.get("reply_to") or ""
-        return_path = email_metadata.get("return_path") or ""
+        reply_to = email_metadata.get("reply_to") or auth_results.get("reply_to") or ""
+        return_path = email_metadata.get("return_path") or auth_results.get("return_path") or ""
         sender_domain = self._extract_domain(sender_address)
         reply_domain = self._extract_domain(reply_to)
         return_path_domain = self._extract_domain(return_path)
@@ -129,9 +140,9 @@ class ExplainableScoringEngine:
         # SPF SOFTFAIL (+15) is always independent.
         # ---------------------------------------------------------
         pillar_auth_score = 0.0
-        spf_verdict = (auth_results.get("spf_verdict") or "").upper()
-        dkim_verdict = (auth_results.get("dkim_verdict") or "").upper()
-        dmarc_verdict = (auth_results.get("dmarc_verdict") or "").upper()
+        spf_verdict = (auth_results.get("spf_verdict") or auth_results.get("spf_result") or auth_results.get("spf_status") or "").upper()
+        dkim_verdict = (auth_results.get("dkim_verdict") or auth_results.get("dkim_result") or auth_results.get("dkim_status") or "").upper()
+        dmarc_verdict = (auth_results.get("dmarc_verdict") or auth_results.get("dmarc_result") or auth_results.get("dmarc_status") or "").upper()
         from_align = (auth_results.get("from_domain_aligned") or "NONE").upper()
 
         spoofed_signals = 0
@@ -190,21 +201,62 @@ class ExplainableScoringEngine:
 
         # Inconsistent Reply-To vs Sender Address
         if reply_to and sender_address and reply_domain and sender_domain and (reply_domain != sender_domain):
-            findings.append(
-                ForensicFindingData(
-                    finding_type="IDENTITY_REPLY_TO_MISMATCH",
-                    severity="HIGH",
-                    confidence=0.92,
-                    title=f"Inconsistent Reply-To and Sender Address",
-                    description=(
-                        f"Sender address domain is '{sender_domain}' but Reply-To redirects responses to '{reply_domain}' ({reply_to}). "
-                        f"Mismatched return channels are frequently utilized in phishing and BEC lures to capture responses on unauthenticated drop boxes."
-                    ),
-                    evidence={"sender_address": sender_address, "reply_to": reply_to},
-                )
+            sender_local = sender_address.split("@")[0].lower() if "@" in sender_address else ""
+            is_collab_sharing = (
+                sender_domain in self._KNOWN_COLLABORATION_PLATFORMS
+                or any(sender_domain.endswith("." + p) for p in self._KNOWN_COLLABORATION_PLATFORMS)
+                or any(kw in sender_local for kw in ("drive-shares", "comments-noreply", "calendar-notification", "notifications", "no-reply", "noreply", "share-", "sharing", "invit"))
             )
-            pillar_auth_score += 30.0
-            spoofed_signals += 1
+
+            # If the email is from a collaborative platform and passes cryptographic auth (SPF or DKIM)
+            if is_collab_sharing and (dkim_verdict == "PASS" or spf_verdict == "PASS"):
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="IDENTITY_COLLABORATIVE_SHARE_REPLY_TO",
+                        severity="INFO",
+                        confidence=0.95,
+                        title="Legitimate Collaboration Share Reply-To",
+                        description=(
+                            f"Verified notification service '{sender_domain}' ({sender_address}) "
+                            f"properly routes replies to the collaborating user '{reply_domain}' ({reply_to})."
+                        ),
+                        evidence={"sender_address": sender_address, "reply_to": reply_to},
+                    )
+                )
+                # 0 penalty for legitimate collaborative notifications
+            elif dkim_verdict == "PASS" and spf_verdict == "PASS":
+                # Cryptographically validated sender: reply-to difference is common for newsletters/mailing lists
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="IDENTITY_REPLY_TO_NOTICE",
+                        severity="LOW",
+                        confidence=0.75,
+                        title="Reply-To Domain Differs From Sender",
+                        description=(
+                            f"Sender domain '{sender_domain}' differs from Reply-To '{reply_domain}'. "
+                            f"Cryptographic authentication is verified; treated as standard external return channel."
+                        ),
+                        evidence={"sender_address": sender_address, "reply_to": reply_to},
+                    )
+                )
+                pillar_auth_score += 5.0
+            else:
+                # Unauthenticated or failed SPF/DKIM with reply-to mismatch: genuine high risk BEC/phishing signal
+                findings.append(
+                    ForensicFindingData(
+                        finding_type="IDENTITY_REPLY_TO_MISMATCH",
+                        severity="HIGH",
+                        confidence=0.92,
+                        title=f"Inconsistent Reply-To and Sender Address",
+                        description=(
+                            f"Sender address domain is '{sender_domain}' but Reply-To redirects responses to '{reply_domain}' ({reply_to}). "
+                            f"Mismatched return channels without verified authentication are frequently utilized in phishing and BEC lures."
+                        ),
+                        evidence={"sender_address": sender_address, "reply_to": reply_to},
+                    )
+                )
+                pillar_auth_score += 30.0
+                spoofed_signals += 1
 
         # Inconsistent Return-Path vs From Address
         if return_path_domain and sender_domain and return_path_domain != sender_domain and from_align != "PASS":
@@ -220,7 +272,7 @@ class ExplainableScoringEngine:
             )
             pillar_auth_score += 15.0
 
-        if dkim_verdict == "PASS" and spf_verdict == "PASS" and from_align == "PASS" and not (reply_domain and reply_domain != sender_domain):
+        if dkim_verdict == "PASS" and spf_verdict == "PASS" and from_align == "PASS":
             findings.append(
                 ForensicFindingData(
                     finding_type="AUTH_AUTHENTICATION_PASSED",
@@ -460,6 +512,11 @@ class ExplainableScoringEngine:
             score = ind.get("consensus_threat_score", 0.0)
             val = ind.get("indicator_value", "")
             itype = ind.get("indicator_type", "")
+            val_lower = (val or "").strip().lower()
+
+            # Ignore trusted infrastructure false alarms in threat indicators
+            if itype == "DOMAIN" and (val_lower in self._KNOWN_COLLABORATION_PLATFORMS or any(val_lower.endswith("." + p) for p in self._KNOWN_COLLABORATION_PLATFORMS)):
+                continue
 
             if verdict == "MALICIOUS":
                 findings.append(
@@ -649,6 +706,14 @@ class ExplainableScoringEngine:
             capped_payload +
             capped_social
         )
+
+        # Authentication Mitigation: Verified cryptographically signed emails (SPF=PASS, DKIM=PASS, DMARC=PASS)
+        # without critical payload or confirmed malicious URLs receive a safety dampening discount.
+        has_critical_findings = any(f.severity == "CRITICAL" for f in findings)
+        is_fully_authenticated = (dkim_verdict == "PASS" and spf_verdict == "PASS" and from_align == "PASS")
+        if is_fully_authenticated and not has_critical_findings:
+            raw_risk_score = max(0.0, raw_risk_score - 25.0)
+
         threat_risk_score = min(100.0, max(0.0, raw_risk_score))
 
         # Evidence Confidence Score Calculation (0.0 to 100.0)
@@ -670,7 +735,7 @@ class ExplainableScoringEngine:
 
         evidence_confidence_score = min(100.0, max(15.0, conf_points))
 
-        # Determine Primary Threat Classification
+        # Determine Primary Threat Classification (0-39 Benign, 40-69 Suspicious, 70-100 Malicious)
         if threat_risk_score >= 70.0:
             if any(f.finding_type.startswith("ATTACHMENT_") or "MALICIOUS" in f.finding_type for f in findings):
                 threat_classification = "MALICIOUS"
@@ -678,7 +743,7 @@ class ExplainableScoringEngine:
                 threat_classification = "SPOOFING"
             else:
                 threat_classification = "PHISHING"
-        elif threat_risk_score >= 30.0:
+        elif threat_risk_score >= 40.0:
             threat_classification = "SUSPICIOUS"
         else:
             threat_classification = "BENIGN"

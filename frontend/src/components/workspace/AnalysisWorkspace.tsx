@@ -1176,7 +1176,11 @@ ZW5kb2JqCg==
               </Section>
 
               {/* AI Forensic Threat Reasoning Panel (Groq-Powered RAG) */}
-              <AIForensicPanel emailId={selectedEmailId} />
+              <AIForensicPanel
+                emailId={selectedEmailId}
+                threatScore={analysisData?.threat_risk_score}
+                verdict={analysisData?.threat_classification}
+              />
 
               {/* Human Analyst Layer & Active Learning Disposition Panel */}
               <AnalystDispositionPanel

@@ -13,6 +13,15 @@ from app.intelligence.adapters.internal_reputation import InternalReputationAdap
 logger = logging.getLogger(__name__)
 
 
+TRUSTED_GLOBAL_DOMAINS = {
+    "google.com", "gmail.com", "microsoft.com", "office.com", "outlook.com",
+    "apple.com", "icloud.com", "amazon.com", "aws.amazon.com", "github.com",
+    "cloudflare.com", "yahoo.com", "zoom.us", "dropbox.com", "box.com",
+    "atlassian.net", "jira.com", "salesforce.com", "docs.google.com", "drive.google.com",
+    "sakec.ac.in",
+}
+
+
 @dataclass
 class AggregatedThreatIntel:
     """
@@ -126,8 +135,19 @@ class ThreatIntelEngine:
         for r in reports:
             all_tags.update(r.tags)
 
+        val_lower = indicator_value.strip().lower()
+        is_trusted_domain = (
+            indicator_type == "DOMAIN"
+            and (val_lower in TRUSTED_GLOBAL_DOMAINS or any(val_lower.endswith("." + d) for d in TRUSTED_GLOBAL_DOMAINS))
+        )
+
         # Weighted calculation
-        if malicious_reports:
+        if is_trusted_domain and len(malicious_reports) == 0:
+            consensus_verdict = "BENIGN"
+            consensus_threat_score = 0.0
+            consensus_confidence = 0.95
+            all_tags.add("VERIFIED_TRUSTED_INFRASTRUCTURE")
+        elif malicious_reports:
             consensus_verdict = "MALICIOUS"
             max_score = max(r.threat_score for r in malicious_reports)
             avg_score = sum(r.threat_score for r in malicious_reports) / len(malicious_reports)

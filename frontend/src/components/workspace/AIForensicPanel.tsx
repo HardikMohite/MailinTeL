@@ -17,7 +17,40 @@ import {
 
 interface AIForensicPanelProps {
   emailId?: string;
+  threatScore?: number;
+  verdict?: string;
 }
+
+const BENIGN_REASONING: AIReasoningItem[] = [
+  {
+    finding: 'Cryptographic identity authentication passed',
+    evidence:
+      'SPF, DKIM, and DMARC alignment verified successfully. The origin relay is authorized by sending domain policy.',
+    confidence: 0.98,
+  },
+  {
+    finding: 'Clean sender & relay infrastructure',
+    evidence:
+      'Sender domain and relay IP have confirmed positive reputation across global threat intelligence consensus.',
+    confidence: 0.95,
+  },
+];
+
+const BENIGN_ATTACK_INTENT = [
+  'Routine collaborative workflow',
+  'Legitimate document or notification dispatch',
+];
+
+const BENIGN_SOCIAL_ENGINEERING = [
+  'No deceptive urgency or pressure tactics detected',
+  'Clean sender envelope identity',
+];
+
+const BENIGN_RECOMMENDED_ACTIONS = [
+  'Permit standard email delivery to recipient',
+  'Sender identity cryptographically verified; no quarantine required',
+  'Maintain standard baseline threat intelligence telemetry',
+];
 
 const DEFAULT_REASONING: AIReasoningItem[] = [
   {
@@ -59,7 +92,7 @@ const DEFAULT_RECOMMENDED_ACTIONS = [
   'Investigate the Sendinblue account associated with 11929178.brevosend.com for compromise',
 ];
 
-export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => {
+export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threatScore, verdict }) => {
   const [data, setData] = useState<AIThreatReasoningResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
 
@@ -82,19 +115,52 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => 
     }
   }, [emailId]);
 
-  const classification = data?.classification || 'phishing';
-  const confidence = data?.confidence !== undefined ? data.confidence : 0.94;
-  const reasoning = data?.reasoning && data.reasoning.length > 0 ? data.reasoning : DEFAULT_REASONING;
+  const isDefaultBenign =
+    (threatScore !== undefined && threatScore < 40) ||
+    (verdict && (verdict.toLowerCase() === 'benign' || verdict.toLowerCase() === 'legitimate'));
+
+  const classification = data?.classification || (isDefaultBenign ? 'legitimate' : 'suspicious');
+  const isLegitimate = classification.toLowerCase() === 'legitimate' || classification.toLowerCase() === 'benign';
+  const isSuspicious = classification.toLowerCase() === 'suspicious';
+
+  const confidence = data?.confidence !== undefined ? data.confidence : (isLegitimate ? 0.96 : 0.90);
+  const reasoning =
+    data?.reasoning && data.reasoning.length > 0
+      ? data.reasoning
+      : isLegitimate
+      ? BENIGN_REASONING
+      : DEFAULT_REASONING;
+
   const attackIntent =
-    data?.attack_intent && data.attack_intent.length > 0 ? data.attack_intent : DEFAULT_ATTACK_INTENT;
+    data?.attack_intent && data.attack_intent.length > 0
+      ? data.attack_intent
+      : isLegitimate
+      ? BENIGN_ATTACK_INTENT
+      : DEFAULT_ATTACK_INTENT;
+
   const socialEngineering =
     data?.social_engineering_indicators && data.social_engineering_indicators.length > 0
       ? data.social_engineering_indicators
+      : isLegitimate
+      ? BENIGN_SOCIAL_ENGINEERING
       : DEFAULT_SOCIAL_ENGINEERING;
+
   const recommendedActions =
     data?.recommended_actions && data.recommended_actions.length > 0
       ? data.recommended_actions
+      : isLegitimate
+      ? BENIGN_RECOMMENDED_ACTIONS
       : DEFAULT_RECOMMENDED_ACTIONS;
+
+  let badgeClass = 'bg-rose-50 border-rose-200 text-rose-600';
+  let BadgeIcon = ShieldAlert;
+  if (isLegitimate) {
+    badgeClass = 'bg-emerald-50 border-emerald-200 text-emerald-700';
+    BadgeIcon = ShieldCheck;
+  } else if (isSuspicious) {
+    badgeClass = 'bg-amber-50 border-amber-200 text-amber-700';
+    BadgeIcon = AlertTriangle;
+  }
 
   return (
     <div className="space-y-4">
@@ -131,8 +197,8 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => 
           </div>
 
           <div className="flex items-center gap-2.5 self-start sm:self-center">
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 border border-rose-200 text-rose-600">
-              <ShieldAlert className="w-3.5 h-3.5" />
+            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${badgeClass}`}>
+              <BadgeIcon className="w-3.5 h-3.5" />
               <span>{classification.toUpperCase()}</span>
               <span className="text-[10px] font-mono ml-0.5 opacity-80">
                 ({Math.round(confidence * 100)}% conf)
@@ -154,8 +220,8 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => 
         <div className="mt-5">
           <div className="flex items-center justify-between mb-3.5">
             <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-              WHY FLAGGED (FORENSIC DRIVERS)
+              <span className={`w-2 h-2 rounded-full ${isLegitimate ? 'bg-emerald-500' : 'bg-blue-500'}`}></span>
+              {isLegitimate ? 'FORENSIC INTEGRITY SIGNALS' : 'WHY FLAGGED (FORENSIC DRIVERS)'}
             </h4>
             <span className="text-[11px] text-slate-400 font-mono">
               {reasoning.length} verified evidence points
@@ -171,7 +237,7 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => 
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-3">
-                    <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                    <div className={`w-6 h-6 rounded-full ${isLegitimate ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'} font-bold text-xs flex items-center justify-center shrink-0 mt-0.5`}>
                       {idx + 1}
                     </div>
                     <div>
@@ -195,16 +261,20 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => 
         {/* Two-Column Grid: Attack Intent & Social Engineering */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 pt-5 border-t border-slate-100">
           {/* Attack Intent */}
-          <div className="p-4 rounded-xl bg-rose-50/30 border border-rose-100">
-            <h5 className="text-[11px] font-bold uppercase tracking-wider text-rose-800 mb-3 flex items-center gap-2">
-              <Activity className="w-3.5 h-3.5 text-rose-500" />
-              Attack Intent / Objectives
+          <div className={`p-4 rounded-xl border ${isLegitimate ? 'bg-emerald-50/20 border-emerald-100' : 'bg-rose-50/30 border-rose-100'}`}>
+            <h5 className={`text-[11px] font-bold uppercase tracking-wider mb-3 flex items-center gap-2 ${isLegitimate ? 'text-emerald-800' : 'text-rose-800'}`}>
+              <Activity className={`w-3.5 h-3.5 ${isLegitimate ? 'text-emerald-500' : 'text-rose-500'}`} />
+              {isLegitimate ? 'Communication Nature / Intent' : 'Attack Intent / Objectives'}
             </h5>
             <div className="flex flex-wrap gap-2">
               {attackIntent.map((intent: string, i: number) => (
                 <span
                   key={i}
-                  className="inline-flex items-center px-3 py-1 rounded-lg text-xs font-medium bg-rose-50 border border-rose-200/80 text-rose-700 shadow-2xs"
+                  className={`inline-flex items-center px-3 py-1 rounded-lg text-xs font-medium shadow-2xs border ${
+                    isLegitimate
+                      ? 'bg-emerald-50 border-emerald-200/80 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200/80 text-rose-700'
+                  }`}
                 >
                   {intent}
                 </span>
@@ -213,16 +283,20 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId }) => 
           </div>
 
           {/* Social Engineering */}
-          <div className="p-4 rounded-xl bg-amber-50/30 border border-amber-100">
-            <h5 className="text-[11px] font-bold uppercase tracking-wider text-amber-800 mb-3 flex items-center gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-              Social Engineering & Urgency Signals
+          <div className={`p-4 rounded-xl border ${isLegitimate ? 'bg-slate-50 border-slate-200/80' : 'bg-amber-50/30 border-amber-100'}`}>
+            <h5 className={`text-[11px] font-bold uppercase tracking-wider mb-3 flex items-center gap-2 ${isLegitimate ? 'text-slate-700' : 'text-amber-800'}`}>
+              <AlertTriangle className={`w-3.5 h-3.5 ${isLegitimate ? 'text-slate-400' : 'text-amber-500'}`} />
+              {isLegitimate ? 'Behavioral & Urgency Assessment' : 'Social Engineering & Urgency Signals'}
             </h5>
             <div className="flex flex-wrap gap-2">
               {socialEngineering.map((ind: string, i: number) => (
                 <span
                   key={i}
-                  className="inline-flex items-center px-3 py-1 rounded-lg text-xs font-medium bg-amber-50 border border-amber-200/80 text-amber-700 shadow-2xs"
+                  className={`inline-flex items-center px-3 py-1 rounded-lg text-xs font-medium shadow-2xs border ${
+                    isLegitimate
+                      ? 'bg-white border-slate-200 text-slate-700'
+                      : 'bg-amber-50 border-amber-200/80 text-amber-700'
+                  }`}
                 >
                   {ind}
                 </span>

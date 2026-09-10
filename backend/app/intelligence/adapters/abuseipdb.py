@@ -57,17 +57,17 @@ class AbuseIPDBAdapter(BaseThreatIntelAdapter):
                     if is_whitelisted:
                         verdict = "BENIGN"
                         confidence = 0.90
-                    elif score >= 50 or total_reports >= 10:
+                    elif score >= 50 or total_reports >= 25:
                         verdict = "MALICIOUS"
                         confidence = min(0.95, 0.70 + (score / 300.0))
                         tags.append("HIGH_ABUSE_REPORTS")
-                    elif score >= 15 or total_reports >= 2:
+                    elif score >= 25 or total_reports >= 8:
                         verdict = "SUSPICIOUS"
                         confidence = 0.65
                         tags.append("SUSPICIOUS_ABUSE_REPORTS")
                     else:
-                        verdict = "BENIGN" if total_reports == 0 else "UNKNOWN"
-                        confidence = 0.80 if total_reports == 0 else 0.40
+                        verdict = "BENIGN" if total_reports <= 3 else "UNKNOWN"
+                        confidence = 0.80 if total_reports == 0 else 0.50
 
                     return ThreatIntelReport(
                         indicator_type="IP",
