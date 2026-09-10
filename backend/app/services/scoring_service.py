@@ -189,13 +189,28 @@ async def execute_email_analysis_and_scoring(
         )
         db.add(finding_rec)
 
-    # 12. Mark AnalysisRun and Email as COMPLETED
+    # 12. Mark AnalysisRun and Email as COMPLETED and sync qualification status
     analysis_run.status = "COMPLETED"
     analysis_run.completed_at = datetime.now(timezone.utc)
     analysis_run.metadata_json = {
         "scoring_pillars": scoring_result.scoring_pillars,
     }
     email_obj.analysis_status = "COMPLETED"
+
+    if scoring_result.threat_classification == "BENIGN" or scoring_result.threat_risk_score < 40.0:
+        email_obj.qualification_status = "NORMAL"
+        try:
+            from app.models.campaign import CampaignMembership
+            from sqlalchemy import delete
+            await db.execute(
+                delete(CampaignMembership).where(CampaignMembership.email_id == email_id)
+            )
+        except (StopIteration, StopAsyncIteration):
+            pass
+    elif scoring_result.threat_classification in ("MALICIOUS", "PHISHING"):
+        email_obj.qualification_status = "MALICIOUS"
+    elif scoring_result.threat_classification == "SUSPICIOUS":
+        email_obj.qualification_status = "SUSPICIOUS"
 
     await db.commit()
 
