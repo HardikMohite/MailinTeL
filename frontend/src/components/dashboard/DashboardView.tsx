@@ -7,9 +7,11 @@ import {
   listReports,
   listPlatformUsers,
   listPlatformOrganizations,
+  listOrgMembers,
   EmailDetailResponse,
   CampaignListItemResponse,
 } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 interface DashboardViewProps {
   onAnalyze?: () => void;
@@ -50,6 +52,8 @@ const timeAgo = (iso: string): string => {
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) => {
+  const { user, isCrossOrg } = useAuth();
+  const isSysAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
   const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignListItemResponse[]>([]);
   const [totalReports, setTotalReports] = useState<number>(0);
@@ -64,19 +68,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
       setLoading(true);
       setError(null);
       try {
-        const [emailPage, campaignList, reportPage, userList, orgList] = await Promise.all([
+        const [emailPage, campaignList, reportPage, userCount, orgCount] = await Promise.all([
           listEmails(0, 100),
           listCampaigns(undefined, 0, 50).catch(() => []),
           listReports(undefined, undefined, 1),
-          listPlatformUsers().catch(() => []),
-          listPlatformOrganizations().catch(() => []),
+          (isSysAdmin ? listPlatformUsers() : listOrgMembers())
+            .then((res) => (Array.isArray(res) ? res.length : 1))
+            .catch(() => 1),
+          (isSysAdmin
+            ? listPlatformOrganizations().then((res) => (Array.isArray(res) ? res.length : 1))
+            : Promise.resolve(user?.organization_id ? 1 : 1)
+          ).catch(() => 1),
         ]);
         if (cancelled) return;
-        setEmails(emailPage.items);
-        setCampaigns(campaignList);
-        setTotalReports(reportPage.total_reports);
-        setTotalUsers(userList.length);
-        setTotalOrganizations(orgList.length);
+        setEmails(emailPage.items || []);
+        setCampaigns(campaignList || []);
+        setTotalReports(reportPage.total_reports || 0);
+        setTotalUsers(userCount);
+        setTotalOrganizations(orgCount);
       } catch (err) {
         if (!cancelled) setError('Could not load dashboard data from the backend.');
       } finally {
@@ -86,7 +95,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isSysAdmin, user?.organization_id]);
 
   // Filter out safe / normal emails — strictly threat & phishing emails only
   const phishingEmails = emails.filter(
