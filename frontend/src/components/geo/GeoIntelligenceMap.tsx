@@ -53,8 +53,8 @@ const TILE_SERVERS: Record<TileLayerType, { url: string; attribution: string; na
     name: 'Tactical Dark',
   },
   voyager: {
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap',
+    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OpenStreetMap Team',
     name: 'City Streets (Detailed)',
   },
   osm: {
