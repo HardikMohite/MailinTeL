@@ -1,0 +1,114 @@
+@import "leaflet/dist/leaflet.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.leaflet-container {
+  background-color: #070D1E !important;
+  font-family: inherit;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #0D1B2A !important;
+  color: #E2E8F0 !important;
+  border: 1px solid #1E3A5F !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-popup-tip {
+  background: #0D1B2A !important;
+  border: 1px solid #1E3A5F !important;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.3;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@layer base {
+  body {
+    @apply bg-workspace text-text-primary antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Quiet scrollbars — visible on hover, unobtrusive otherwise */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: theme('colors.workspace.border');
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: theme('colors.text.muted');
+}
+
+/* Dark-surface scrollbar variant — apply with .scrollbar-dark on a dark container */
+.scrollbar-dark::-webkit-scrollbar-thumb {
+  background: theme('colors.navy.border');
+}
+.scrollbar-dark::-webkit-scrollbar-thumb:hover {
+  background: theme('colors.text.secondary');
+}
+
+/* Standard card surface (Design.md §11): white bg, subtle border, minimal shadow */
+.surface-card {
+  @apply bg-workspace-card border border-workspace-border rounded-xl shadow-sm;
+}
+
+/* Elevated dark panel for investigation/graph/technical surfaces (Design.md §3.1) */
+.surface-dark {
+  @apply bg-navy-deep border border-navy-border rounded-xl;
+}
+
+/* Subtle fade-in for panel/tab content transitions — restrained, no bounce or glow */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.18s ease-out;
+}
+
+@keyframes stitch-flow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-stitch-flow {
+  animation: stitch-flow 1.2s linear infinite;
+}
