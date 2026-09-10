@@ -811,6 +811,8 @@ class ReportService:
         report_id = data.get("report_id", str(uuid.uuid4()))
         email_id = data.get("email_id", "N/A")
         generated_at = data.get("generated_at", datetime.now(timezone.utc).isoformat())
+        limitations = data.get("limitations_and_disclaimer", {})
+        disclaimer_text = limitations.get("disclaimer") or ATTRIBUTION_DISCLAIMER
 
         findings = scores.get("findings", [])
         if not findings:
@@ -1537,8 +1539,8 @@ class ReportService:
 
       <!-- Mandatory Sender Location Disclaimer -->
       <div class="red-disclaimer">
-        <b>IMPORTANT NOTICE & SENDER LOCATION DISCLAIMER:</b>
-        This report is generated automatically from email headers, security checks, and threat databases. The server locations, IP addresses, and network paths listed above indicate the mail servers that processed or forwarded the message—they do NOT prove the real-world identity or physical location of the human sender. All scores and findings are decision-support signals to help human security teams investigate.
+        <b>IMPORTANT NOTICE & SENDER LOCATION DISCLAIMER:</b><br/>
+        {disclaimer_text}
         <ul>
           <li><b>Network Path:</b> Early email routing hops can be faked or spoofed before reaching trusted mail servers.</li>
           <li><b>Physical Location:</b> Data center and server coordinates belong to the hosting provider, not necessarily the attacker.</li>
