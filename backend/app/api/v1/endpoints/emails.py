@@ -492,6 +492,17 @@ async def upload_eml_file(
 
     await db.commit()
 
+    from app.core.audit import record_audit
+    await record_audit(
+        db,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        action="UPLOAD",
+        resource_type="EMAIL",
+        resource_id=email_id,
+        metadata_json={"filename": filename, "size_bytes": size_bytes},
+    )
+
     # 5. Parse email structure and persist headers/recipients into DB
     try:
         await parse_and_persist_email(email_id=email_id, raw_bytes=content, db=db)

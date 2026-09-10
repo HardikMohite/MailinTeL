@@ -140,6 +140,17 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
     await db.commit()
 
+    from app.core.audit import record_audit
+    await record_audit(
+        db,
+        actor_user_id=user.id,
+        organization_id=organization.id,
+        action="REGISTER",
+        resource_type="USER",
+        resource_id=user.id,
+        metadata_json={"email": user.email, "workspace": organization.name},
+    )
+
     logger.info("New user '%s' registered with role '%s' (workspace: %s)", user.email, role.code, organization.name)
 
     token = create_access_token(user_id=user.id, organization_id=organization.id, role_code=role.code)
@@ -225,6 +236,17 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
 
     user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
+
+    from app.core.audit import record_audit
+    await record_audit(
+        db,
+        actor_user_id=user.id,
+        organization_id=org_id,
+        action="LOGIN",
+        resource_type="AUTH",
+        resource_id=user.id,
+        metadata_json={"email": user.email, "role": role_code},
+    )
 
     token = create_access_token(user_id=user.id, organization_id=org_id, role_code=role_code)
     return TokenResponse(

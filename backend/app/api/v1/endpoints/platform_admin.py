@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, require_roles
@@ -199,7 +199,12 @@ async def list_audit_log(
     from app.models.audit import AuditLog
     stmt = select(AuditLog).order_by(AuditLog.occurred_at.desc()).limit(limit)
     if actor_user_id:
-        stmt = stmt.where(AuditLog.actor_user_id == actor_user_id)
+        stmt = stmt.where(
+            or_(
+                AuditLog.actor_user_id == actor_user_id,
+                AuditLog.resource_id == actor_user_id,
+            )
+        )
     if organization_id:
         stmt = stmt.where(AuditLog.organization_id == organization_id)
     if action:
