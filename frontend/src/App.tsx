@@ -12,6 +12,7 @@ import { EvidenceVaultView } from './components/evidence/EvidenceVaultView';
 import { ForensicReportView } from './components/reports/ForensicReportView';
 import { SettingsView } from './components/settings/SettingsView';
 import { TeamView } from './components/settings/TeamView';
+import { OrganizationView } from './components/settings/OrganizationView';
 import { PlatformAdminView } from './pages/PlatformAdminView';
 import { checkHealth, checkDetailedHealth, HealthResponse, DetailedHealthResponse } from './services/api';
 import { apiEvents } from './services/apiEvents';
@@ -94,6 +95,7 @@ export const App: React.FC = () => {
     evidence: { title: 'Evidence Vault', breadcrumb: ['MailinteL', 'Forensic Management'] },
     reports: { title: 'Reports', breadcrumb: ['MailinteL', 'Forensic Management'] },
     team: { title: 'Team & Access', breadcrumb: ['MailinteL', 'Forensic Management'] },
+    organization: { title: 'Organization', breadcrumb: ['MailinteL', 'Governance & Access'] },
     settings: { title: 'Settings', breadcrumb: ['MailinteL', 'Forensic Management'] },
     'platform-admin': { title: 'Platform Administration', breadcrumb: ['MailinteL', 'Platform Administration'] },
   };
@@ -191,6 +193,9 @@ export const App: React.FC = () => {
 
           {/* Team & Access Tab */}
           {activeTab === 'team' && <TeamView />}
+
+          {/* Organization Tab */}
+          {activeTab === 'organization' && <OrganizationView />}
 
           {/* Platform Administration Tab */}
           {activeTab === 'platform-admin' && (

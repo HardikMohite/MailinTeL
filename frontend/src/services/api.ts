@@ -1514,15 +1514,72 @@ export interface PlatformMember extends OrgMember {
   organization_id: string;
   organization_name: string;
 }
+export interface CompanyAdminPublic {
+  id: string;
+  full_name?: string | null;
+  email: string;
+}
+
 export interface OrganizationItem {
   id: string;
   name: string;
   organization_type: string;
   status: string;
   created_at: string;
+  company_admin?: CompanyAdminPublic | null;
+  member_count?: number;
 }
+
+export interface OrganizationDetail extends OrganizationItem {
+  updated_at: string;
+  members: OrgMember[];
+}
+
+export interface EligibleUser {
+  id: string;
+  email: string;
+  full_name?: string | null;
+  status: string;
+  created_at: string;
+}
+
 export const listPlatformOrganizations = async (): Promise<OrganizationItem[]> =>
   (await apiClient.get<OrganizationItem[]>('/platform/organizations')).data;
+
+export const getPlatformOrganization = async (orgId: string): Promise<OrganizationDetail> =>
+  (await apiClient.get<OrganizationDetail>(`/platform/organizations/${orgId}`)).data;
+
+export const deletePlatformOrganization = async (orgId: string, permanent: boolean = false): Promise<void> => {
+  await apiClient.delete(`/platform/organizations/${orgId}`, { params: { permanent } });
+};
+
+export const updatePlatformOrganizationStatus = async (orgId: string, status: 'ACTIVE' | 'INACTIVE'): Promise<OrganizationItem> =>
+  (await apiClient.patch<OrganizationItem>(`/platform/organizations/${orgId}/status`, { status })).data;
+
+export const listOrganizationMembers = async (orgId: string): Promise<PlatformMember[]> =>
+  (await apiClient.get<PlatformMember[]>(`/platform/organizations/${orgId}/members`)).data;
+
+export interface AssignMemberPayload {
+  user_id?: string;
+  email?: string;
+  full_name?: string;
+  role_code?: string;
+}
+
+export const assignOrganizationMember = async (orgId: string, payload: AssignMemberPayload): Promise<PlatformMember> =>
+  (await apiClient.post<PlatformMember>(`/platform/organizations/${orgId}/members`, payload)).data;
+
+
+export const assignCompanyAdmin = async (orgId: string, payload: { user_id: string }): Promise<PlatformMember> =>
+  (await apiClient.post<PlatformMember>(`/platform/organizations/${orgId}/company-admin`, payload)).data;
+
+export const removeOrganizationMember = async (orgId: string, userId: string): Promise<void> => {
+  await apiClient.delete(`/platform/organizations/${orgId}/members/${userId}`);
+};
+
+export const listEligibleUsers = async (): Promise<EligibleUser[]> =>
+  (await apiClient.get<EligibleUser[]>('/platform/eligible-users')).data;
+
 export const listPlatformUsers = async (organizationId?: string): Promise<PlatformMember[]> =>
   (await apiClient.get<PlatformMember[]>('/platform/users', { params: organizationId ? { organization_id: organizationId } : undefined })).data;
 // Deliberately NOT `InviteUserPayload & {...}` -- InviteUserPayload's
@@ -1549,6 +1606,7 @@ export interface CreateOrganizationPayload {
 }
 export const createPlatformOrganization = async (payload: CreateOrganizationPayload): Promise<OrganizationItem> =>
   (await apiClient.post<OrganizationItem>('/platform/organizations', payload)).data;
+
 
 // ---------------------------------------------------------------------------
 // Platform audit log (SYSTEM_ADMIN only) — see

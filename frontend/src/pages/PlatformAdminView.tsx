@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 import {
   listPlatformOrganizations,
-  createPlatformOrganization,
   listPlatformUsers,
   invitePlatformUser,
   updatePlatformUserRole,
@@ -41,6 +40,8 @@ import { useAuth } from '../context/AuthContext';
 import { useApiErrorHandler } from '../hooks/useApiErrorHandler';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { ALL_ASSIGNABLE_ROLES, RoleCode } from '../constants/rbac';
+import { OrganizationView } from '../components/settings/OrganizationView';
+
 
 const ROLE_LABELS: Record<string, string> = {
   INSTITUTION_ADMIN: 'Institution Admin',
@@ -79,15 +80,9 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   const [emailQualFilter, setEmailQualFilter] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  // --- Organizations -------------------------------------------------
+  // --- Organizations (cached for cross-section filters) -------------
   const [organizations, setOrganizations] = useState<OrganizationItem[]>([]);
-  const [orgsLoading, setOrgsLoading] = useState(true);
-  const [orgsError, setOrgsError] = useState<string | null>(null);
-  const [showCreateOrg, setShowCreateOrg] = useState(false);
-  const [newOrgName, setNewOrgName] = useState('');
-  const [newOrgType, setNewOrgType] = useState('ENTERPRISE');
-  const [creatingOrg, setCreatingOrg] = useState(false);
-  const [createOrgError, setCreateOrgError] = useState<string | null>(null);
+
 
   // --- Cross-org users -------------------------------------------------
   const [members, setMembers] = useState<PlatformMember[]>([]);
@@ -141,17 +136,13 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   }, [emailQualFilter, emailOrgFilter, parseApiError]);
 
   const loadOrganizations = useCallback(async () => {
-    setOrgsLoading(true);
-    setOrgsError(null);
     try {
       const data = await listPlatformOrganizations();
       setOrganizations(data);
-    } catch (err) {
-      setOrgsError(parseApiError(err).message);
-    } finally {
-      setOrgsLoading(false);
+    } catch {
+      // Non-fatal fallback for dropdown filters
     }
-  }, [parseApiError]);
+  }, []);
 
   const loadMembers = useCallback(
     async (orgId: string) => {
@@ -272,22 +263,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     );
   }
 
-  const handleCreateOrg = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreateOrgError(null);
-    setCreatingOrg(true);
-    try {
-      await createPlatformOrganization({ name: newOrgName.trim(), organization_type: newOrgType.trim() || undefined });
-      setNewOrgName('');
-      setNewOrgType('ENTERPRISE');
-      setShowCreateOrg(false);
-      await loadOrganizations();
-    } catch (err) {
-      setCreateOrgError(parseApiError(err).message);
-    } finally {
-      setCreatingOrg(false);
-    }
-  };
+
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -684,119 +660,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
 
       {/* SECTION 2: ORGANIZATIONS */}
       {activeSection === 'organizations' && (
-        <section className="space-y-3">
-          <div className="bg-workspace-card border border-workspace-border rounded-xl p-5 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-brand-soft flex items-center justify-center">
-                <Building2 className="w-4 h-4 text-brand" />
-              </div>
-              <div>
-                <h3 className="text-[13.5px] font-semibold text-text-primary">Organizations</h3>
-                <p className="text-[12px] text-text-muted mt-0.5">Create and review every organization on the platform.</p>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                setShowCreateOrg(true);
-                setCreateOrgError(null);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors"
-            >
-              <Building2 className="w-4 h-4" />
-              New organization
-            </button>
-          </div>
-
-          {showCreateOrg && (
-            <div className="bg-workspace-card border border-workspace-border rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-[13.5px] font-semibold text-text-primary">Create organization</h4>
-                <button onClick={() => setShowCreateOrg(false)} className="text-text-muted hover:text-text-primary">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <form onSubmit={handleCreateOrg} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2">
-                  <label className="block text-[12px] font-medium text-text-secondary mb-1">Organization name</label>
-                  <input
-                    type="text"
-                    required
-                    value={newOrgName}
-                    onChange={(e) => setNewOrgName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-workspace-border text-[13px] focus:outline-none focus:ring-2 focus:ring-brand/30"
-                    placeholder="Acme Bank"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[12px] font-medium text-text-secondary mb-1">Type</label>
-                  <input
-                    type="text"
-                    value={newOrgType}
-                    onChange={(e) => setNewOrgType(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-workspace-border text-[13px] focus:outline-none focus:ring-2 focus:ring-brand/30"
-                    placeholder="ENTERPRISE"
-                  />
-                </div>
-                <div className="sm:col-span-3 flex items-center gap-3">
-                  <button
-                    type="submit"
-                    disabled={creatingOrg || !newOrgName.trim()}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors disabled:opacity-50"
-                  >
-                    {creatingOrg && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Create organization
-                  </button>
-                  {createOrgError && (
-                    <span className="text-[12.5px] text-severity-critical flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      {createOrgError}
-                    </span>
-                  )}
-                </div>
-              </form>
-            </div>
-          )}
-
-          {orgsError && (
-            <div className="bg-severity-critical-soft border border-severity-critical/30 rounded-xl p-4 flex items-center gap-2 text-[13px] text-severity-critical">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              {orgsError}
-            </div>
-          )}
-
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden">
-            {orgsLoading ? (
-              <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading organizations...
-              </div>
-            ) : organizations.length === 0 ? (
-              <div className="p-10 text-center text-text-muted text-[13px]">No organizations found.</div>
-            ) : (
-              <table className="w-full text-[13px]">
-                <thead className="bg-workspace-header border-b border-workspace-border">
-                  <tr className="text-left text-text-muted text-[11.5px] uppercase tracking-wide">
-                    <th className="px-4 py-2.5 font-semibold">Organization</th>
-                    <th className="px-4 py-2.5 font-semibold">Type</th>
-                    <th className="px-4 py-2.5 font-semibold">Status</th>
-                    <th className="px-4 py-2.5 font-semibold">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {organizations.map((org) => (
-                    <tr key={org.id} className="border-b border-workspace-border last:border-0 hover:bg-workspace-secondary/50">
-                      <td className="px-4 py-3 font-medium text-text-primary">{org.name}</td>
-                      <td className="px-4 py-3 text-text-secondary">{org.organization_type}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge type="severity" value={org.status === 'ACTIVE' ? 'safe' : 'critical'} label={org.status} size="sm" />
-                      </td>
-                      <td className="px-4 py-3 text-text-muted">{fmtDateTime(org.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
+        <OrganizationView />
       )}
 
       {/* SECTION 3: USERS ACROSS ORGANIZATIONS */}

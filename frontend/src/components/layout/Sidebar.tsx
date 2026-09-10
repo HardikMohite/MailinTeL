@@ -11,6 +11,7 @@ import {
   FileText,
   Settings,
   Users,
+  Building2,
   ShieldCheck,
   ExternalLink,
 } from 'lucide-react';
@@ -36,6 +37,7 @@ export type NavTab =
   | 'evidence'
   | 'reports'
   | 'team'
+  | 'organization'
   | 'settings'
   | 'platform-admin';
 
@@ -95,6 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           title: 'Governance & Access',
           items: [
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
+            { id: 'organization' as const, label: 'Organization', icon: Building2 },
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],
         },
@@ -123,6 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
             { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
             { id: 'reports', label: 'Forensic Reports', icon: FileText },
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
+            ...(canManageTeam ? [{ id: 'organization' as const, label: 'Organization', icon: Building2 }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],
         },

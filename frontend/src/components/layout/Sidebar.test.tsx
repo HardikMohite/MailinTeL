@@ -92,5 +92,42 @@ describe('Sidebar — Admin Panel Information Architecture', () => {
     expect(screen.getByText('Email Investigation')).toBeInTheDocument();
     expect(screen.getByText('Campaign Clusters')).toBeInTheDocument();
   });
+
+  it('renders Organization between Team & Access and Settings in Governance & Access with active styling', () => {
+    const onTabChange = vi.fn();
+    mockAuthFor('SYSTEM_ADMIN');
+    render(<Sidebar activeTab="organization" onTabChange={onTabChange} />);
+
+    // Verify Organization is present
+    const orgItem = screen.getByText('Organization');
+    expect(orgItem).toBeInTheDocument();
+
+    // Verify Team & Access and Settings are present
+    const teamItem = screen.getByText('Team & Access');
+    const settingsItem = screen.getByText('Settings');
+    expect(teamItem).toBeInTheDocument();
+    expect(settingsItem).toBeInTheDocument();
+
+    // Verify order: Team & Access precedes Organization, which precedes Settings
+    const allButtons = screen.getAllByRole('button');
+    const buttonTexts = allButtons.map((b) => b.textContent?.trim() || '');
+    const teamIndex = buttonTexts.findIndex((t) => t.includes('Team & Access'));
+    const orgIndex = buttonTexts.findIndex((t) => t.includes('Organization'));
+    const settingsIndex = buttonTexts.findIndex((t) => t.includes('Settings'));
+
+    expect(teamIndex).toBeGreaterThan(-1);
+    expect(orgIndex).toBeGreaterThan(teamIndex);
+    expect(settingsIndex).toBeGreaterThan(orgIndex);
+
+    // Verify active styling on activeTab === 'organization'
+    const orgButton = orgItem.closest('button');
+    expect(orgButton).toHaveClass('bg-brand');
+    expect(orgButton).toHaveClass('text-white');
+
+    // Verify clicking Organization fires onTabChange
+    orgButton?.click();
+    expect(onTabChange).toHaveBeenCalledWith('organization');
+  });
 });
+
 
