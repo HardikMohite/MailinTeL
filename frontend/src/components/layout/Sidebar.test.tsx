@@ -60,3 +60,37 @@ describe('Sidebar — Platform Admin nav item', () => {
     expect(screen.queryByText('Platform Admin')).not.toBeInTheDocument();
   });
 });
+
+describe('Sidebar — Admin Panel Information Architecture', () => {
+  it('removes Email Investigation and displays Campaign in Investigation Operations for SYSTEM_ADMIN', () => {
+    mockAuthFor('SYSTEM_ADMIN');
+    render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
+
+    // CHANGE 1: Email Investigation is removed from Admin Panel
+    expect(screen.queryByText('Email Investigation')).not.toBeInTheDocument();
+
+    // CHANGE 2 & 3: Campaign Clusters is renamed to exactly 'Campaign' and moved into Investigation Operations
+    expect(screen.getByText('Campaign')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign Clusters')).not.toBeInTheDocument();
+
+    // Verify other Investigation Operations items are present
+    expect(screen.getByText('Analysis History')).toBeInTheDocument();
+    expect(screen.getByText('Evidence Vault')).toBeInTheDocument();
+    expect(screen.getByText('Forensic Reports')).toBeInTheDocument();
+
+    // Verify Threat Intelligence items are present
+    expect(screen.getByText('IOC Threat Intel')).toBeInTheDocument();
+    expect(screen.getByText('Investigation Graph')).toBeInTheDocument();
+    expect(screen.getByText('Geo Transmission Map')).toBeInTheDocument();
+  });
+
+  it('preserves Email Investigation and Campaign Clusters in analyst panel', () => {
+    mockAuthFor('SECURITY_ANALYST');
+    render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
+
+    // Preserved for analyst-facing workflow
+    expect(screen.getByText('Email Investigation')).toBeInTheDocument();
+    expect(screen.getByText('Campaign Clusters')).toBeInTheDocument();
+  });
+});
+
