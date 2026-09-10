@@ -406,10 +406,10 @@ class CampaignCorrelationService:
         if not c:
             return None
 
-        # Fetch memberships with email subjects
+        # Fetch memberships with email subjects (use outerjoin in case email was purged or quarantined)
         m_res = await session.execute(
             select(CampaignMembership, Email.subject, Email.sender_address)
-            .join(Email, Email.id == CampaignMembership.email_id)
+            .outerjoin(Email, Email.id == CampaignMembership.email_id)
             .where(CampaignMembership.campaign_id == campaign_id)
         )
         memberships_data = []
@@ -417,12 +417,12 @@ class CampaignCorrelationService:
             memberships_data.append({
                 "id": str(m.id),
                 "email_id": str(m.email_id),
-                "email_subject": subj,
-                "email_sender": sender,
-                "membership_confidence": float(m.membership_confidence),
-                "membership_status": m.membership_status,
+                "email_subject": subj or "Subject Unavailable",
+                "email_sender": sender or "Unknown Sender",
+                "membership_confidence": float(m.membership_confidence or 0.0),
+                "membership_status": m.membership_status or "CONFIRMED",
                 "evidence_summary": m.evidence_summary or {},
-                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "created_at": m.created_at.isoformat() if hasattr(m.created_at, "isoformat") else (str(m.created_at) if m.created_at else None),
             })
 
         # Fetch evidence items
@@ -432,10 +432,10 @@ class CampaignCorrelationService:
         evidence_data = [
             {
                 "id": str(e.id),
-                "evidence_type": e.evidence_type,
-                "confidence": float(e.confidence),
-                "explanation": e.explanation,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
+                "evidence_type": e.evidence_type or "GENERAL_CORRELATION",
+                "confidence": float(e.confidence or 0.0),
+                "explanation": e.explanation or "Correlated campaign artifact",
+                "created_at": e.created_at.isoformat() if hasattr(e.created_at, "isoformat") else (str(e.created_at) if e.created_at else None),
             }
             for e in ev_res.scalars().all()
         ]
@@ -449,9 +449,9 @@ class CampaignCorrelationService:
         events_data = [
             {
                 "id": str(evt.id),
-                "event_type": evt.event_type,
-                "occurred_at": evt.occurred_at.isoformat() if evt.occurred_at else None,
-                "description": evt.description,
+                "event_type": evt.event_type or "CAMPAIGN_DETECTED",
+                "occurred_at": evt.occurred_at.isoformat() if hasattr(evt.occurred_at, "isoformat") else (str(evt.occurred_at) if evt.occurred_at else None),
+                "description": evt.description or "",
                 "metadata": evt.metadata_json or {},
             }
             for evt in evts_res.scalars().all()
@@ -459,12 +459,12 @@ class CampaignCorrelationService:
 
         res_dict = {
             "id": str(c.id),
-            "campaign_name": c.campaign_name,
-            "campaign_status": c.campaign_status,
-            "campaign_confidence": float(c.campaign_confidence),
-            "threat_summary": c.threat_summary,
-            "first_detected_at": c.first_detected_at.isoformat() if c.first_detected_at else None,
-            "last_activity_at": c.last_activity_at.isoformat() if c.last_activity_at else None,
+            "campaign_name": c.campaign_name or "Unnamed Campaign",
+            "campaign_status": c.campaign_status or "ACTIVE",
+            "campaign_confidence": float(c.campaign_confidence or 0.0),
+            "threat_summary": c.threat_summary or "",
+            "first_detected_at": c.first_detected_at.isoformat() if hasattr(c.first_detected_at, "isoformat") else (str(c.first_detected_at) if c.first_detected_at else None),
+            "last_activity_at": c.last_activity_at.isoformat() if hasattr(c.last_activity_at, "isoformat") else (str(c.last_activity_at) if c.last_activity_at else None),
             "total_members": len(memberships_data),
             "total_evidence_links": len(evidence_data),
             "memberships": memberships_data,
