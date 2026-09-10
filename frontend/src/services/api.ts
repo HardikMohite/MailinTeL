@@ -37,26 +37,49 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Centralized handling for global session expiry and true network loss.
+// Centralized handling for global session expiry, transient retries, and genuine network loss.
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (axios.isAxiosError(error)) {
-      if (!error.response) {
-        // Only trigger full-app offline screen on genuine network disconnection,
-        // not on individual query timeouts (ECONNABORTED) or cancelled requests.
-        const isTrueNetworkLoss =
-          error.code === 'ERR_NETWORK' ||
-          (typeof window !== 'undefined' && !window.navigator.onLine);
+      const config = error.config as any;
 
-        if (isTrueNetworkLoss) {
-          apiEvents.emit('network-error');
-        }
-      } else if (error.response.status === 401) {
-        // Session is gone — stop sending a now-invalid token and let
-        // AuthContext clear its state so AuthGate switches to LoginScreen.
+      // Handle 401 Unauthorized (session expired)
+      if (error.response?.status === 401) {
         clearAuthToken();
         apiEvents.emit('unauthorized');
+        return Promise.reject(error);
+      }
+
+      // Identify transient errors that benefit from an immediate retry:
+      // - ERR_NETWORK (socket closed, cloud proxy cold start)
+      // - ECONNABORTED (request timeout)
+      // - 502 Bad Gateway / 503 Service Unavailable / 504 Gateway Timeout (Render waking up)
+      const status = error.response?.status;
+      const isTransient =
+        error.code === 'ERR_NETWORK' ||
+        error.code === 'ECONNABORTED' ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
+
+      if (config && isTransient) {
+        config._retryCount = config._retryCount || 0;
+        const maxRetries = 2;
+
+        if (config._retryCount < maxRetries) {
+          config._retryCount += 1;
+          const delayMs = config._retryCount * 1200; // 1.2s, 2.4s backoff
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return apiClient(config);
+        }
+      }
+
+      // Only trigger full-app offline screen on genuine hardware/browser network disconnection.
+      // A temporary server glitch or cold-start should never destroy the user's active page state.
+      const isBrowserOffline = typeof window !== 'undefined' && !window.navigator.onLine;
+      if (isBrowserOffline) {
+        apiEvents.emit('network-error');
       }
     }
     return Promise.reject(error);

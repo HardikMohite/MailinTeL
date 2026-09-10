@@ -59,11 +59,20 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchHealthStatus();
+
+    // Keepalive heartbeat: ping backend health periodically when tab is active
+    // to prevent Render free-tier cloud instances from spinning down during active sessions.
+    const keepAliveInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        checkHealth().catch(() => {});
+      }
+    }, 4 * 60 * 1000); // every 4 minutes
+
+    return () => clearInterval(keepAliveInterval);
   }, []);
 
-  // Global network-failure handling: any apiClient call that gets no
-  // response at all flips the app into OfflineScreen. OfflineScreen itself
-  // polls checkHealth and calls this back the moment the backend answers.
+  // Global network-failure handling: triggered when browser connectivity is genuinely lost.
+  // OfflineScreen polls checkHealth and calls handleBackOnline the moment connection is restored.
   useEffect(() => {
     return apiEvents.on('network-error', () => setIsOffline(true));
   }, []);
@@ -72,6 +81,7 @@ export const App: React.FC = () => {
     setIsOffline(false);
     fetchHealthStatus();
   }, []);
+
 
   const handleInspectEmailInWorkspace = (emailId: string) => {
     setFocalEmailId(emailId);

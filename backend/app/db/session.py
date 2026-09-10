@@ -34,7 +34,12 @@ def get_engine_connect_args() -> Dict[str, Any]:
         args["statement_cache_size"] = 0
         args["prepared_statement_cache_size"] = 0
 
+    # Set resilient connection and command timeouts for cloud network transit
+    args["timeout"] = 15.0
+    args["command_timeout"] = 60.0
+
     return args
+
 
 
 # Determine engine pooling options
