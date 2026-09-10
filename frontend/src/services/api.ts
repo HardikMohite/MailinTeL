@@ -2,7 +2,22 @@ import axios from 'axios';
 import { apiEvents } from './apiEvents';
 import { getAuthToken, clearAuthToken } from './authStorage';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const resolveApiBaseUrl = (): string => {
+  const envUrl = (import.meta.env.VITE_API_URL || '').trim();
+  if (!envUrl) {
+    return '/api/v1';
+  }
+  const cleanUrl = envUrl.replace(/\/+$/, '');
+  if (cleanUrl.endsWith('/api/v1')) {
+    return cleanUrl;
+  }
+  if (cleanUrl.endsWith('/api')) {
+    return `${cleanUrl}/v1`;
+  }
+  return `${cleanUrl}/api/v1`;
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,

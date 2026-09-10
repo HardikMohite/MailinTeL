@@ -46,9 +46,16 @@ class Settings(BaseSettings):
     # Server Settings
     BACKEND_HOST: str = "127.0.0.1"
     BACKEND_PORT: int = 8000
+    PORT: Optional[int] = None
     FRONTEND_URL: str = "http://localhost:5173"
     # Comma-separated list of extra allowed CORS origins (beyond FRONTEND_URL / localhost dev defaults)
     ALLOWED_ORIGINS: str = ""
+    # Regex pattern for allowed CORS origins (e.g. all Vercel preview domains: https://.*\.vercel\.app)
+    CORS_ORIGIN_REGEX: Optional[str] = r"https://.*\.vercel\.app"
+
+    @property
+    def effective_port(self) -> int:
+        return self.PORT or self.BACKEND_PORT
 
     @field_validator("APP_ENV")
     @classmethod
@@ -58,6 +65,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.APP_ENV in ("production", "prod", "staging")
+
+    @property
+    def cors_origin_regex(self) -> Optional[str]:
+        return self.CORS_ORIGIN_REGEX or None
 
     @property
     def cors_origins(self) -> List[str]:
@@ -70,7 +81,7 @@ class Settings(BaseSettings):
         # In production, never fall back to permissive localhost dev origins
         if self.is_production:
             origins = {o for o in origins if "localhost" not in o and "127.0.0.1" not in o}
-        return sorted(origins)
+        return sorted([o for o in origins if o])
 
     # Database (PostgreSQL + pgvector / Supabase)
     POSTGRES_USER: str = "postgres"
@@ -347,8 +358,29 @@ class Settings(BaseSettings):
             )
         if self.DEBUG:
             problems.append("DEBUG must be False.")
-        if self.POSTGRES_PASSWORD in ("postgres", ""):
-            problems.append("POSTGRES_PASSWORD is using an insecure default.")
+        # Check database password safety
+        db_password_weak = False
+        raw_db_url = (self.DATABASE_URL or "").strip()
+        is_default_localhost_db = raw_db_url in (
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/mailintel",
+            "postgresql://postgres:postgres@localhost:5432/mailintel",
+            "",
+            None,
+        )
+
+        if not is_default_localhost_db:
+            try:
+                parsed_url = make_url(self.effective_database_url)
+                if parsed_url.password in ("postgres", "", None):
+                    db_password_weak = True
+            except Exception:
+                pass
+        else:
+            if self.POSTGRES_PASSWORD in ("postgres", ""):
+                db_password_weak = True
+
+        if db_password_weak:
+            problems.append("POSTGRES_PASSWORD (or DATABASE_URL password) is using an insecure default ('postgres' or empty).")
 
         if self.active_storage_provider == "supabase":
             if not self.SUPABASE_URL or not (

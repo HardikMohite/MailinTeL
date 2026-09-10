@@ -1,0 +1,52 @@
+# Render Infrastructure as Code (Blueprint)
+# Documentation: https://render.com/docs/blueprint-spec
+version: "1"
+
+services:
+  # ---------------------------------------------------------------------------
+  # MailinteL FastAPI Backend Web Service
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: mailintel-backend
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: "./render-build.sh"
+    startCommand: "./render-start.sh"
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: BACKEND_HOST
+        value: 0.0.0.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOW_SELF_SIGNUP
+        value: "true"
+      - key: STORAGE_PROVIDER
+        value: supabase
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: CORS_ORIGIN_REGEX
+        value: "https://.*\\.vercel\\.app"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+      - key: ABUSEIPDB_API_KEY
+        sync: false
