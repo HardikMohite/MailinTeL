@@ -64,6 +64,40 @@ class InvestigationGraph:
             ],
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "InvestigationGraph":
+        nodes = [
+            GraphNode(
+                id=n["id"],
+                label=n["label"],
+                node_type=n["node_type"],
+                display_name=n["display_name"],
+                risk_level=n.get("risk_level", "UNKNOWN"),
+                metadata=n.get("metadata", {}),
+            )
+            for n in data.get("nodes", [])
+        ]
+        edges = [
+            GraphEdge(
+                id=e["id"],
+                source=e["source"],
+                target=e["target"],
+                relationship_type=e["relationship_type"],
+                label=e["label"],
+                confidence=float(e.get("confidence", 100.0)),
+                evidence=e.get("evidence", {}),
+            )
+            for e in data.get("edges", [])
+        ]
+        return cls(
+            focal_node_id=data.get("focal_node_id"),
+            nodes=nodes,
+            edges=edges,
+            total_nodes=len(nodes),
+            total_edges=len(edges),
+            statistics=data.get("statistics", {}),
+        )
+
 
 class InvestigationGraphBuilder:
     """

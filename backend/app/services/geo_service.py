@@ -1,7 +1,7 @@
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
@@ -22,7 +22,18 @@ from app.intelligence.geo_resolver import (
     ATTRIBUTION_DISCLAIMER,
 )
 
+import time
+from app.core.redis import redis_manager
+
 logger = logging.getLogger("mailintel.services.geo")
+
+# High-speed in-memory caches for geo queries
+_GEO_IP_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_GEO_EMAIL_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_GEO_CAMPAIGN_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_GEO_GLOBAL_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_GEO_CACHE_TTL: float = 1800.0
+_GEO_IP_TTL: float = 86400.0  # 24 hours for IP location
 
 
 class GeolocationService:
@@ -32,6 +43,20 @@ class GeolocationService:
     (transmission hops, originating servers, MX hosts, domain servers).
     Maintains strict attribution integrity disclaimers.
     """
+
+    @staticmethod
+    async def invalidate_geo_cache(email_id: Optional[uuid.UUID] = None, campaign_id: Optional[uuid.UUID] = None) -> None:
+        """Invalidates geo infrastructure caches."""
+        try:
+            _GEO_GLOBAL_CACHE.clear()
+            if email_id:
+                _GEO_EMAIL_CACHE.pop(str(email_id), None)
+                await redis_manager.delete(f"cache:geo:email:{email_id}")
+            if campaign_id:
+                _GEO_CAMPAIGN_CACHE.pop(str(campaign_id), None)
+                await redis_manager.delete(f"cache:geo:campaign:{campaign_id}")
+        except Exception as e:
+            logger.warning(f"Geo cache invalidation notice: {e}")
 
     def __init__(self, resolver: Optional[AsyncGeoIPResolver] = None):
         self.resolver = resolver or default_geoip_resolver
@@ -49,6 +74,21 @@ class GeolocationService:
         persisting Geolocation & EntityGeolocation records.
         """
         clean_ip = ip_address.strip()
+        now = time.time()
+        # Fast path if IP already resolved and no entity linkage requested
+        if not entity_id and clean_ip in _GEO_IP_CACHE:
+            ts, data = _GEO_IP_CACHE[clean_ip]
+            if now - ts < _GEO_IP_TTL:
+                return data
+        if not entity_id:
+            try:
+                r_data = await redis_manager.get_json(f"cache:geo:ip:{clean_ip}")
+                if r_data:
+                    _GEO_IP_CACHE[clean_ip] = (now, r_data)
+                    return r_data
+            except Exception:
+                pass
+
         geo_result = await self.resolver.resolve_ip_geolocation(clean_ip, host=host)
 
         now_utc = datetime.now(timezone.utc)
@@ -126,7 +166,7 @@ class GeolocationService:
 
         await session.commit()
 
-        return {
+        res_dict = {
             "ip_address": clean_ip,
             "is_private": geo_result.is_private,
             "country_code": geo_result.country_code,
@@ -150,6 +190,12 @@ class GeolocationService:
             "asn_org": geo_result.asn_org,
             "classification_badges": geo_result.classification_badges,
         }
+        _GEO_IP_CACHE[clean_ip] = (now, res_dict)
+        try:
+            await redis_manager.set_json(f"cache:geo:ip:{clean_ip}", res_dict, expire_seconds=86400)
+        except Exception:
+            pass
+        return res_dict
 
     async def geolocate_email_infrastructure(
         self, session: AsyncSession, email_id: uuid.UUID
@@ -158,6 +204,20 @@ class GeolocationService:
         Extracts and geolocates all relay hops and infrastructure nodes for an email,
         constructing ordered transmission paths and geographic markers.
         """
+        now = time.time()
+        key = str(email_id)
+        if key in _GEO_EMAIL_CACHE:
+            ts, data = _GEO_EMAIL_CACHE[key]
+            if now - ts < _GEO_CACHE_TTL:
+                return data
+        try:
+            r_data = await redis_manager.get_json(f"cache:geo:email:{key}")
+            if r_data:
+                _GEO_EMAIL_CACHE[key] = (now, r_data)
+                return r_data
+        except Exception:
+            pass
+
         # Fetch email
         email_stmt = select(Email).where(Email.id == email_id)
         email_res = await session.execute(email_stmt)
@@ -338,7 +398,7 @@ class GeolocationService:
         cloud_count = sum(1 for m in markers if m.get("is_cloud") or m.get("is_datacenter"))
         personal_count = sum(1 for m in markers if m.get("is_personal_mail"))
 
-        return {
+        res_dict = {
             "email_id": str(email_id),
             "subject": email.subject,
             "total_hops": len(hops),
@@ -354,6 +414,12 @@ class GeolocationService:
             "attribution_disclaimer": ATTRIBUTION_DISCLAIMER,
             "deduced_human_origin": deduced_verdict.to_dict(),
         }
+        _GEO_EMAIL_CACHE[key] = (now, res_dict)
+        try:
+            await redis_manager.set_json(f"cache:geo:email:{key}", res_dict, expire_seconds=1800)
+        except Exception:
+            pass
+        return res_dict
 
     async def geolocate_campaign_infrastructure(
         self, session: AsyncSession, campaign_id: uuid.UUID
@@ -361,6 +427,20 @@ class GeolocationService:
         """
         Geolocates all observable infrastructure across all emails belonging to a threat campaign.
         """
+        now = time.time()
+        key = str(campaign_id)
+        if key in _GEO_CAMPAIGN_CACHE:
+            ts, data = _GEO_CAMPAIGN_CACHE[key]
+            if now - ts < _GEO_CACHE_TTL:
+                return data
+        try:
+            r_data = await redis_manager.get_json(f"cache:geo:campaign:{key}")
+            if r_data:
+                _GEO_CAMPAIGN_CACHE[key] = (now, r_data)
+                return r_data
+        except Exception:
+            pass
+
         camp_stmt = select(Campaign).where(Campaign.id == campaign_id)
         camp_res = await session.execute(camp_stmt)
         campaign = camp_res.scalar_one_or_none()
@@ -471,7 +551,7 @@ class GeolocationService:
         cloud_count = sum(1 for m in markers if m.get("is_cloud") or m.get("is_datacenter"))
         personal_count = sum(1 for m in markers if m.get("is_personal_mail"))
 
-        return {
+        res_dict = {
             "campaign_id": str(campaign_id),
             "campaign_name": campaign.campaign_name or "Unnamed Campaign",
             "campaign_status": campaign.campaign_status,
@@ -486,6 +566,12 @@ class GeolocationService:
             "country_distribution": country_counts,
             "attribution_disclaimer": ATTRIBUTION_DISCLAIMER,
         }
+        _GEO_CAMPAIGN_CACHE[key] = (now, res_dict)
+        try:
+            await redis_manager.set_json(f"cache:geo:campaign:{key}", res_dict, expire_seconds=1800)
+        except Exception:
+            pass
+        return res_dict
 
     async def get_global_geo_infrastructure(
         self, session: AsyncSession, limit_emails: int = 50, organization_id: Optional[uuid.UUID] = None
@@ -493,6 +579,20 @@ class GeolocationService:
         """
         Global overview of observable infrastructure across recent emails.
         """
+        now = time.time()
+        key = f"{organization_id or 'all'}:{limit_emails}"
+        if key in _GEO_GLOBAL_CACHE:
+            ts, data = _GEO_GLOBAL_CACHE[key]
+            if now - ts < 600.0:
+                return data
+        try:
+            r_data = await redis_manager.get_json(f"cache:geo:global:{key}")
+            if r_data:
+                _GEO_GLOBAL_CACHE[key] = (now, r_data)
+                return r_data
+        except Exception:
+            pass
+
         recent_emails_stmt = select(Email.id).order_by(Email.created_at.desc()).limit(limit_emails)
         if organization_id is not None:
             recent_emails_stmt = recent_emails_stmt.join(
@@ -502,7 +602,7 @@ class GeolocationService:
         email_ids = recent_emails_res.scalars().all()
 
         if not email_ids:
-            return {
+            empty_res = {
                 "total_emails_scanned": 0,
                 "total_markers": 0,
                 "tor_node_count": 0,
@@ -513,6 +613,12 @@ class GeolocationService:
                 "country_distribution": {},
                 "attribution_disclaimer": ATTRIBUTION_DISCLAIMER,
             }
+            _GEO_GLOBAL_CACHE[key] = (now, empty_res)
+            try:
+                await redis_manager.set_json(f"cache:geo:global:{key}", empty_res, expire_seconds=600)
+            except Exception:
+                pass
+            return empty_res
 
         hops_stmt = select(RelayHop).where(RelayHop.email_id.in_(email_ids))
         hops_res = await session.execute(hops_stmt)
@@ -562,7 +668,7 @@ class GeolocationService:
         cloud_count = sum(1 for m in markers if m.get("is_cloud") or m.get("is_datacenter"))
         personal_count = sum(1 for m in markers if m.get("is_personal_mail"))
 
-        return {
+        res_dict = {
             "total_emails_scanned": len(email_ids),
             "total_unique_ips": len(unique_ips),
             "total_markers": len(markers),
@@ -574,6 +680,12 @@ class GeolocationService:
             "country_distribution": country_counts,
             "attribution_disclaimer": ATTRIBUTION_DISCLAIMER,
         }
+        _GEO_GLOBAL_CACHE[key] = (now, res_dict)
+        try:
+            await redis_manager.set_json(f"cache:geo:global:{key}", res_dict, expire_seconds=600)
+        except Exception:
+            pass
+        return res_dict
 
 
 default_geo_service = GeolocationService()

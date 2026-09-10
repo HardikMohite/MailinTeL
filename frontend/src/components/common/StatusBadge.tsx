@@ -25,38 +25,41 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
     switch (normalizedValue) {
       case 'critical':
         return (
-          <span className={`inline-flex items-center gap-1 rounded-full bg-severity-critical-soft text-severity-critical border border-severity-critical/20 ${sizeClasses}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-severity-critical animate-pulse" />
+          <span className={`inline-flex items-center gap-1.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-semibold ${sizeClasses}`}>
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-600" />
+            </span>
             {displayLabel}
           </span>
         );
       case 'high':
         return (
-          <span className={`inline-flex items-center gap-1 rounded-full bg-severity-high-soft text-severity-high border border-severity-high/20 ${sizeClasses}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-severity-high" />
+          <span className={`inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-semibold ${sizeClasses}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
             {displayLabel}
           </span>
         );
       case 'medium':
         return (
-          <span className={`inline-flex items-center gap-1 rounded-full bg-severity-medium-soft text-severity-medium border border-severity-medium/20 ${sizeClasses}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-severity-medium" />
+          <span className={`inline-flex items-center gap-1.5 rounded-full bg-purple-50 text-purple-800 border border-purple-200 font-medium ${sizeClasses}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-600" />
             {displayLabel}
           </span>
         );
       case 'low':
       case 'informational':
         return (
-          <span className={`inline-flex items-center gap-1 rounded-full bg-severity-low-soft text-severity-low border border-severity-low/20 ${sizeClasses}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-severity-low" />
+          <span className={`inline-flex items-center gap-1.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200 font-medium ${sizeClasses}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-600" />
             {displayLabel}
           </span>
         );
       case 'safe':
       case 'positive':
         return (
-          <span className={`inline-flex items-center gap-1 rounded-full bg-severity-safe-soft text-severity-safe border border-severity-safe/20 ${sizeClasses}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-severity-safe" />
+          <span className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold ${sizeClasses}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
             {displayLabel}
           </span>
         );

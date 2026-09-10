@@ -166,7 +166,7 @@ async def test_get_authorized_campaign_admin_skips_ownership_check():
 # GET /api/v1/campaigns: USER role only lists "their" campaigns
 # ---------------------------------------------------------------------------
 
-def test_api_list_campaigns_user_role_passes_owner_filter():
+def test_api_list_campaigns_user_role_sees_org_campaigns():
     with patch(
         "app.services.campaign_service.default_campaign_service.list_campaigns",
         new=AsyncMock(return_value=[]),
@@ -177,7 +177,7 @@ def test_api_list_campaigns_user_role_passes_owner_filter():
 
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
-        assert kwargs["owner_user_id"] == PLAIN_USER.id
+        assert kwargs["owner_user_id"] is None
 
 
 def test_api_list_campaigns_admin_role_sees_all():
@@ -195,15 +195,28 @@ def test_api_list_campaigns_admin_role_sees_all():
 
 
 # ---------------------------------------------------------------------------
-# Investigation graph / similarity: USER role is blocked outright (403),
-# analyst-and-up roles are allowed through.
+# Investigation graph: all authenticated organization roles have access to
+# the global infrastructure graph, while similarity remains scoped.
 # ---------------------------------------------------------------------------
 
-def test_api_global_graph_forbidden_for_plain_user():
-    app.dependency_overrides[get_current_user] = lambda: PLAIN_USER
-    resp = client.get("/api/v1/graph/global")
-    _clear()
-    assert resp.status_code == 403
+def test_api_global_graph_allowed_for_plain_user():
+    fake_graph = MagicMock()
+    fake_graph.to_dict.return_value = {
+        "nodes": [],
+        "edges": [],
+        "total_nodes": 0,
+        "total_edges": 0,
+        "density": 0.0,
+        "clusters_detected": 0,
+    }
+    with patch(
+        "app.services.graph_service.default_graph_service.build_global_investigation_graph",
+        new=AsyncMock(return_value=fake_graph),
+    ):
+        app.dependency_overrides[get_current_user] = lambda: PLAIN_USER
+        resp = client.get("/api/v1/graph/global")
+        _clear()
+        assert resp.status_code == 200
 
 
 def test_api_similar_emails_forbidden_for_plain_user():

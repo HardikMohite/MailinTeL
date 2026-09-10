@@ -1,4 +1,5 @@
 import logging
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,8 +93,9 @@ app.add_middleware(
     allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["*"],
 )
+
 
 
 @app.middleware("http")
@@ -127,12 +129,37 @@ async def security_headers_and_body_limit(request: Request, call_next):
 # so a misconfigured deployment can't accidentally leak stack traces or internal
 # paths to a client. Full details always go to the server-side log instead.
 
+def _cors_headers_for_request(request: Request) -> dict:
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    allowed = False
+    if origin in settings.cors_origins:
+        allowed = True
+    elif settings.cors_origin_regex and re.search(settings.cors_origin_regex, origin):
+        allowed = True
+    elif not settings.is_production:
+        allowed = True
+
+    if allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    return {}
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    resp_headers = _cors_headers_for_request(request)
+    if getattr(exc, "headers", None):
+        resp_headers.update(exc.headers)
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": exc.detail if isinstance(exc.detail, str) else "Request failed", "path": request.url.path},
-        headers=getattr(exc, "headers", None) or {},
+        headers=resp_headers,
     )
 
 
@@ -167,6 +194,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "path": request.url.path,
             "details": _json_safe_validation_errors(exc),
         },
+        headers=_cors_headers_for_request(request),
     )
 
 
@@ -180,6 +208,7 @@ async def global_exception_handler(request: Request, exc: Exception):
             "message": "An unexpected error occurred. Please try again or contact support.",
             "path": request.url.path,
         },
+        headers=_cors_headers_for_request(request),
     )
 
 

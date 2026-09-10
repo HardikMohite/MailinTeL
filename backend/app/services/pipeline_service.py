@@ -32,6 +32,7 @@ from app.services.dna_service import generate_and_persist_email_dna
 from app.services.similarity_service import default_similarity_service
 from app.services.campaign_service import default_campaign_service
 from app.services.geo_service import default_geo_service
+from app.services.report_service import ReportService
 
 logger = logging.getLogger("mailintel.services.pipeline")
 
@@ -60,12 +61,7 @@ async def _run_geolocation(session: AsyncSession, email_id: uuid.UUID) -> Any:
 
 
 async def _run_campaign_correlation(session: AsyncSession, email_id: uuid.UUID) -> Any:
-    correlations = await default_campaign_service.correlate_email(session=session, email_id=email_id)
-    try:
-        await default_campaign_service.auto_cluster_campaigns(session=session, min_correlation_score=40.0)
-    except Exception as cluster_err:
-        logger.warning(f"Auto-clustering notice for email {email_id}: {cluster_err}")
-    return correlations
+    return await default_campaign_service.correlate_email(session=session, email_id=email_id)
 
 
 # Ordered pipeline stages. Each stage owns its own DB session/transaction and is
@@ -161,6 +157,19 @@ async def run_full_email_analysis_pipeline(job_id: str, email_id: str) -> Dict[s
     except Exception as exc:
         logger.exception(f"Campaign correlation failed for {email_id}: {exc}")
         summary["stages_failed"].append({"stage": "campaign_correlation", "error": str(exc)})
+
+    # Invalidate all caches across panels so next views reflect updated pipeline findings
+    try:
+        from app.services.report_service import ReportService
+        from app.services.graph_service import InvestigationGraphService
+        from app.services.geo_service import GeolocationService
+        from app.api.v1.endpoints.emails import invalidate_email_metadata_cache
+        await ReportService.invalidate_report_cache(email_uuid)
+        await InvestigationGraphService.invalidate_graph_cache(email_id=email_uuid)
+        await GeolocationService.invalidate_geo_cache(email_id=email_uuid)
+        await invalidate_email_metadata_cache(email_uuid)
+    except Exception as inv_err:
+        logger.debug(f"Cache invalidation notice for {email_id}: {inv_err}")
 
     if summary["stages_failed"]:
         logger.warning(

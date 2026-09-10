@@ -93,15 +93,18 @@ async def generate_and_persist_email_dna(
     )
     res_evidence = await db.execute(stmt_evidence)
     evidence_objs = res_evidence.scalars().all()
-    attachments_list = [
-        {
+    attachments_list = []
+    for ev in evidence_objs:
+        meta = getattr(ev, "metadata_json", None) or {}
+        ext = meta.get("extension") if isinstance(meta, dict) else ""
+        if not ext and ev.original_filename and "." in ev.original_filename:
+            ext = ev.original_filename.rsplit(".", 1)[-1].lower()
+        attachments_list.append({
             "filename": ev.original_filename,
             "sha256_hash": ev.sha256_hash,
             "size_bytes": ev.size_bytes,
-            "extension": (ev.metadata_json.get("extension") if ev.metadata_json else ""),
-        }
-        for ev in evidence_objs
-    ]
+            "extension": ext or "",
+        })
 
     stmt_urls = (
         select(URL.normalized_url)

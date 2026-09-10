@@ -40,6 +40,45 @@
   animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* --- Animated DNA Strand Keyframes --- */
+@keyframes dnaNodeA {
+  0%, 100% {
+    transform: translateY(-22px) scale(1.2);
+    opacity: 1;
+    z-index: 20;
+  }
+  50% {
+    transform: translateY(22px) scale(0.65);
+    opacity: 0.35;
+    z-index: 5;
+  }
+}
+
+@keyframes dnaNodeB {
+  0%, 100% {
+    transform: translateY(22px) scale(0.65);
+    opacity: 0.35;
+    z-index: 5;
+  }
+  50% {
+    transform: translateY(-22px) scale(1.2);
+    opacity: 1;
+    z-index: 20;
+  }
+}
+
+@keyframes dnaRung {
+  0%, 100% {
+    height: 44px;
+    opacity: 0.75;
+  }
+  50% {
+    height: 6px;
+    opacity: 0.2;
+  }
+}
+
+
 @layer base {
   body {
     @apply bg-workspace text-text-primary antialiased;
@@ -66,7 +105,7 @@
   background: theme('colors.text.muted');
 }
 
-/* Dark-surface scrollbar variant — apply with .scrollbar-dark on a dark container */
+/* Dark-surface scrollbar variant */
 .scrollbar-dark::-webkit-scrollbar-thumb {
   background: theme('colors.navy.border');
 }
@@ -74,21 +113,82 @@
   background: theme('colors.text.secondary');
 }
 
-/* Standard card surface (Design.md §11): white bg, subtle border, minimal shadow */
+/* --- Card Design Utilities & Elevation System --- */
 .surface-card {
   @apply bg-workspace-card border border-workspace-border rounded-xl shadow-sm;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Elevated dark panel for investigation/graph/technical surfaces (Design.md §3.1) */
 .surface-dark {
   @apply bg-navy-deep border border-navy-border rounded-xl;
 }
 
-/* Subtle fade-in for panel/tab content transitions — restrained, no bounce or glow */
-@keyframes fade-in {
+/* Interactive Card Lift on Hover */
+.hover-lift {
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2.5px);
+  box-shadow: 0 12px 28px -6px rgba(16, 28, 51, 0.09), 0 6px 12px -4px rgba(16, 28, 51, 0.04);
+}
+
+/* Premium KPI Card with Top Accent Strip */
+.kpi-card {
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #E2E8F0;
+  border-radius: 0.875rem;
+  box-shadow: 0 1px 3px 0 rgba(16, 28, 51, 0.05), 0 1px 2px -1px rgba(16, 28, 51, 0.03);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2.5px);
+  box-shadow: 0 12px 24px -4px rgba(16, 28, 51, 0.08), 0 4px 8px -2px rgba(16, 28, 51, 0.03);
+  border-color: #CBD5E1;
+}
+
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--kpi-accent, #2563B8);
+  opacity: 0.9;
+  border-top-left-radius: 0.875rem;
+  border-top-right-radius: 0.875rem;
+  transition: height 0.2s ease, opacity 0.2s ease;
+}
+
+.kpi-card:hover::before {
+  height: 4px;
+  opacity: 1;
+}
+
+/* Glass Surface with Backdrop Filter */
+.glass-surface {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.glass-surface-dark {
+  background: rgba(16, 28, 51, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(42, 60, 92, 0.8);
+}
+
+/* --- Hardware Accelerated Animation Keyframes --- */
+@keyframes fadeInSlideUp {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -97,7 +197,60 @@
 }
 
 .animate-fade-in {
-  animation: fade-in 0.18s ease-out;
+  animation: fadeInSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes beaconPulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(45, 139, 104, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 7px rgba(45, 139, 104, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(45, 139, 104, 0);
+  }
+}
+
+.beacon-pulse {
+  animation: beaconPulse 2.2s infinite ease-in-out;
+}
+
+@keyframes beaconPulseAmber {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(216, 137, 22, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 7px rgba(216, 137, 22, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(216, 137, 22, 0);
+  }
+}
+
+.beacon-pulse-amber {
+  animation: beaconPulseAmber 2.2s infinite ease-in-out;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-bg {
+  background: linear-gradient(90deg, #F1F5F9 25%, #E2E8F0 37%, #F1F5F9 63%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
 }
 
 @keyframes stitch-flow {

@@ -34,10 +34,14 @@ def get_engine_connect_args() -> Dict[str, Any]:
         args["statement_cache_size"] = 0
         args["prepared_statement_cache_size"] = 0
 
+    # Set resilient connection and command timeouts for cloud network transit
+    args["timeout"] = 15.0
+    args["command_timeout"] = 60.0
+
     return args
 
 
-# Determine engine pooling options
+# Determine engine pooling options: keep warm pooled connections alive, or use NullPool for transaction poolers
 _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,
@@ -49,11 +53,13 @@ _engine_kwargs: Dict[str, Any] = {
 if settings.is_pooler_connection or settings.is_supabase_db:
     _engine_kwargs["poolclass"] = NullPool
 else:
-    _engine_kwargs["pool_pre_ping"] = True
-    _engine_kwargs["pool_size"] = 10
-    _engine_kwargs["max_overflow"] = 20
-    _engine_kwargs["pool_timeout"] = 30
-    _engine_kwargs["pool_recycle"] = 180
+    _engine_kwargs.update({
+        "pool_pre_ping": True,
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_timeout": 30,
+        "pool_recycle": 180,
+    })
 
 # Create Async Engine for PostgreSQL
 engine: AsyncEngine = create_async_engine(

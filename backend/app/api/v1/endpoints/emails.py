@@ -2,7 +2,7 @@ import hashlib
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 from fastapi import (
     APIRouter,
@@ -19,6 +19,7 @@ from sqlalchemy import select, desc
 from app.db.session import get_db
 from app.core.config import settings
 from app.core.storage import storage
+from app.core.redis import redis_manager
 from app.core.tasks import job_manager, JobStage, JobStatus
 from app.core.rate_limit import rate_limiter
 from app.api.deps import get_current_user, require_organization_or_cross_org, CurrentUser, ANALYST_ROLES, CROSS_ORG_ROLES
@@ -26,6 +27,7 @@ from app.models.emails import Email, EmailSource, EmailHeader, EmailRecipient, R
 from app.models.intelligence import Domain, URL, EmailURL, IPAddress
 from app.models.evidence import EvidenceObject, CustodyEvent
 import asyncio
+import time
 from app.services.parser_service import parse_and_persist_email, get_cached_structure, cache_structure
 from app.services.header_analysis_service import analyze_and_persist_headers
 from app.services.artifact_service import extract_and_persist_artifacts
@@ -35,6 +37,26 @@ from app.parser.artifact_extractor import EmailArtifactExtractor
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# High-speed in-memory cache for email metadata endpoints
+_EMAIL_CACHE: Dict[str, Tuple[float, Any]] = {}
+_EMAIL_CACHE_TTL = 1800.0  # 30 minutes
+
+
+async def invalidate_email_metadata_cache(email_id: uuid.UUID) -> None:
+    """Invalidates cached metadata for an email."""
+    try:
+        prefix = str(email_id)
+        keys_to_del = [k for k in _EMAIL_CACHE.keys() if prefix in k or k.startswith("list:")]
+        for k in keys_to_del:
+            _EMAIL_CACHE.pop(k, None)
+        await redis_manager.delete(f"cache:email:details:{prefix}")
+        await redis_manager.delete(f"cache:email:headers:{prefix}")
+        await redis_manager.delete(f"cache:email:hops:{prefix}")
+        await redis_manager.delete(f"cache:email:auth:{prefix}")
+        await redis_manager.delete(f"cache:email:artifacts:{prefix}")
+    except Exception as e:
+        logger.warning(f"Email cache invalidation notice: {e}")
 
 
 async def _get_authorized_email_and_evidence(
@@ -492,6 +514,17 @@ async def upload_eml_file(
 
     await db.commit()
 
+    from app.core.audit import record_audit
+    await record_audit(
+        db,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        action="UPLOAD",
+        resource_type="EMAIL",
+        resource_id=email_id,
+        metadata_json={"filename": filename, "size_bytes": size_bytes},
+    )
+
     # 5. Parse email structure and persist headers/recipients into DB
     try:
         await parse_and_persist_email(email_id=email_id, raw_bytes=content, db=db)
@@ -638,6 +671,20 @@ async def get_email_headers(
     """Retrieve ordered RFC822 headers for an email."""
     await _get_authorized_email_and_evidence(email_id, current_user, db)
 
+    cache_key = f"headers:{email_id}"
+    now = time.time()
+    if cache_key in _EMAIL_CACHE:
+        ts, data = _EMAIL_CACHE[cache_key]
+        if now - ts < _EMAIL_CACHE_TTL:
+            return EmailHeadersResponse(**data)
+    try:
+        r_data = await redis_manager.get_json(f"cache:email:{cache_key}")
+        if r_data:
+            _EMAIL_CACHE[cache_key] = (now, r_data)
+            return EmailHeadersResponse(**r_data)
+    except Exception:
+        pass
+
     stmt = select(EmailHeader).where(EmailHeader.email_id == email_id).order_by(EmailHeader.header_order)
     result = await db.execute(stmt)
     headers_rows = result.scalars().all()
@@ -652,11 +699,17 @@ async def get_email_headers(
         for h in headers_rows
     ]
 
-    return EmailHeadersResponse(
+    resp = EmailHeadersResponse(
         email_id=str(email_id),
         total_headers=len(header_items),
         headers=header_items,
     )
+    _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
+    try:
+        await redis_manager.set_json(f"cache:email:{cache_key}", resp.model_dump(), expire_seconds=1800)
+    except Exception:
+        pass
+    return resp
 
 
 @router.get(
@@ -672,6 +725,20 @@ async def get_email_relay_hops(
 ) -> RelayHopsResponse:
     """Retrieve chronological SMTP relay hops for an email."""
     await _get_authorized_email_and_evidence(email_id, current_user, db)
+
+    cache_key = f"hops:{email_id}"
+    now = time.time()
+    if cache_key in _EMAIL_CACHE:
+        ts, data = _EMAIL_CACHE[cache_key]
+        if now - ts < _EMAIL_CACHE_TTL:
+            return RelayHopsResponse(**data)
+    try:
+        r_data = await redis_manager.get_json(f"cache:email:{cache_key}")
+        if r_data:
+            _EMAIL_CACHE[cache_key] = (now, r_data)
+            return RelayHopsResponse(**r_data)
+    except Exception:
+        pass
 
     stmt = select(RelayHop).where(RelayHop.email_id == email_id).order_by(RelayHop.sequence_number)
     result = await db.execute(stmt)
@@ -698,13 +765,19 @@ async def get_email_relay_hops(
     originating_ip = hop_items[0].source_ip if hop_items else None
     originating_host = hop_items[0].source_host if hop_items else None
 
-    return RelayHopsResponse(
+    resp = RelayHopsResponse(
         email_id=str(email_id),
         total_hops=len(hop_items),
         originating_ip=originating_ip,
         originating_host=originating_host,
         hops=hop_items,
     )
+    _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
+    try:
+        await redis_manager.set_json(f"cache:email:{cache_key}", resp.model_dump(), expire_seconds=1800)
+    except Exception:
+        pass
+    return resp
 
 
 @router.get(
@@ -721,18 +794,34 @@ async def get_email_auth_results(
     """Retrieve SPF, DKIM, DMARC, and alignment results."""
     await _get_authorized_email_and_evidence(email_id, current_user, db)
 
+    cache_key = f"auth:{email_id}"
+    now = time.time()
+    if cache_key in _EMAIL_CACHE:
+        ts, data = _EMAIL_CACHE[cache_key]
+        if now - ts < _EMAIL_CACHE_TTL:
+            return EmailAuthResponse(**data)
+    try:
+        r_data = await redis_manager.get_json(f"cache:email:{cache_key}")
+        if r_data:
+            _EMAIL_CACHE[cache_key] = (now, r_data)
+            return EmailAuthResponse(**r_data)
+    except Exception:
+        pass
+
     stmt = select(EmailAuthenticationResult).where(EmailAuthenticationResult.email_id == email_id)
     result = await db.execute(stmt)
     auth_obj = result.scalar_one_or_none()
 
     if not auth_obj:
-        return EmailAuthResponse(
+        resp = EmailAuthResponse(
             email_id=str(email_id),
             spf_result="NONE",
             dkim_result="NONE",
             dmarc_result="NONE",
             from_alignment_result="NONE",
         )
+        _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
+        return resp
 
     evidence_dict = auth_obj.evidence or {}
     dkim_sigs = [
@@ -740,7 +829,7 @@ async def get_email_auth_results(
         for s in evidence_dict.get("dkim_signatures", [])
     ]
 
-    return EmailAuthResponse(
+    resp = EmailAuthResponse(
         email_id=str(email_id),
         spf_result=auth_obj.spf_result,
         dkim_result=auth_obj.dkim_result,
@@ -752,6 +841,12 @@ async def get_email_auth_results(
         dkim_signatures=dkim_sigs,
         evidence=evidence_dict,
     )
+    _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
+    try:
+        await redis_manager.set_json(f"cache:email:{cache_key}", resp.model_dump(), expire_seconds=1800)
+    except Exception:
+        pass
+    return resp
 
 
 @router.get(
@@ -767,6 +862,20 @@ async def get_email_artifacts(
 ) -> EmailArtifactsResponse:
     """Retrieve extracted IOC artifacts and attachments for an email."""
     _, evidence_obj = await _get_authorized_email_and_evidence(email_id, current_user, db)
+
+    cache_key = f"artifacts:{email_id}"
+    now = time.time()
+    if cache_key in _EMAIL_CACHE:
+        ts, data = _EMAIL_CACHE[cache_key]
+        if now - ts < _EMAIL_CACHE_TTL:
+            return EmailArtifactsResponse(**data)
+    try:
+        r_data = await redis_manager.get_json(f"cache:email:{cache_key}")
+        if r_data:
+            _EMAIL_CACHE[cache_key] = (now, r_data)
+            return EmailArtifactsResponse(**r_data)
+    except Exception:
+        pass
 
     if not evidence_obj or not evidence_obj.object_key:
         raise HTTPException(
@@ -788,7 +897,7 @@ async def get_email_artifacts(
     extractor = EmailArtifactExtractor()
     bundle = extractor.extract_artifacts(raw_bytes)
 
-    return EmailArtifactsResponse(
+    resp = EmailArtifactsResponse(
         email_id=str(email_id),
         total_urls=bundle.total_urls,
         total_domains=bundle.total_domains,
@@ -800,6 +909,12 @@ async def get_email_artifacts(
         ip_addresses=[ExtractedIPSchema(**i.to_dict()) for i in bundle.ip_addresses],
         attachments=[ExtractedAttachmentSchema(**a.to_dict()) for a in bundle.attachments],
     )
+    _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
+    try:
+        await redis_manager.set_json(f"cache:email:{cache_key}", resp.model_dump(), expire_seconds=1800)
+    except Exception:
+        pass
+    return resp
 
 
 @router.post(
@@ -979,6 +1094,20 @@ async def get_email_details(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> EmailDetailResponse:
     """Retrieve detailed email record by UUID."""
+    cache_key = f"details:{email_id}"
+    now = time.time()
+    if cache_key in _EMAIL_CACHE:
+        ts, data = _EMAIL_CACHE[cache_key]
+        if now - ts < _EMAIL_CACHE_TTL:
+            return EmailDetailResponse(**data)
+    try:
+        r_data = await redis_manager.get_json(f"cache:email:{cache_key}")
+        if r_data:
+            _EMAIL_CACHE[cache_key] = (now, r_data)
+            return EmailDetailResponse(**r_data)
+    except Exception:
+        pass
+
     stmt = (
         select(Email, EmailSource, EvidenceObject)
         .outerjoin(EmailSource, Email.source_id == EmailSource.id)
@@ -1000,7 +1129,7 @@ async def get_email_details(
     if source_org_id is not None and current_user.role_code not in CROSS_ORG_ROLES and source_org_id != current_user.organization_id:
         raise not_found
 
-    return EmailDetailResponse(
+    resp = EmailDetailResponse(
         id=str(email.id),
         source_type=source.source_type if source else "UNKNOWN",
         original_filename=evidence.original_filename if evidence else (source.source_reference if source else None),
@@ -1017,6 +1146,12 @@ async def get_email_details(
         sha256_hash=evidence.sha256_hash if evidence else None,
         evidence_id=str(evidence.id) if evidence else None,
     )
+    _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
+    try:
+        await redis_manager.set_json(f"cache:email:{cache_key}", resp.model_dump(), expire_seconds=1800)
+    except Exception:
+        pass
+    return resp
 
 
 @router.get(
@@ -1046,40 +1181,75 @@ async def list_emails(
     from app.models.identity import Organization
 
     requested_org_id = organization_id if current_user.role_code in CROSS_ORG_ROLES else current_user.organization_id
-    query = (
-        select(Email, EmailSource, EvidenceObject, Organization)
+
+    # Fast 30s caching for default paginated listings across panels (Dashboard, Vault, Workspace)
+    list_cache_key = f"list:{requested_org_id or 'all'}:{current_user.id if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES else 'org'}:{skip}:{limit}"
+    if not analysis_status and not qualification_status and not threat_only:
+        if list_cache_key in _EMAIL_CACHE:
+            ts, data = _EMAIL_CACHE[list_cache_key]
+            if now - ts < 30.0:
+                return EmailListResponse(**data)
+        try:
+            r_data = await redis_manager.get_json(f"cache:email:{list_cache_key}")
+            if r_data:
+                _EMAIL_CACHE[list_cache_key] = (now, r_data)
+                return EmailListResponse(**r_data)
+        except Exception:
+            pass
+    list_query = (
+        select(Email, EmailSource, EvidenceObject)
         .outerjoin(EmailSource, Email.source_id == EmailSource.id)
         .outerjoin(EvidenceObject, Email.id == EvidenceObject.email_id)
-        .outerjoin(Organization, EmailSource.organization_id == Organization.id)
         .order_by(desc(Email.created_at))
     )
 
     if requested_org_id is not None:
-        query = query.where(or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None)))
+        list_query = list_query.where(
+            or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None))
+        )
 
     if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
-        query = query.where(EmailSource.user_id == current_user.id)
+        list_query = list_query.where(EmailSource.user_id == current_user.id)
 
     if analysis_status:
-        query = query.where(Email.analysis_status == analysis_status)
+        list_query = list_query.where(Email.analysis_status == analysis_status)
     if qualification_status:
-        query = query.where(Email.qualification_status == qualification_status)
+        list_query = list_query.where(Email.qualification_status == qualification_status)
     if threat_only:
-        query = query.where(Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]))
+        list_query = list_query.where(Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]))
 
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total_count = count_result.scalar_one()
-
-    paginated_query = query.offset(skip).limit(limit)
+    paginated_query = list_query.offset(skip).limit(limit)
     result = await db.execute(paginated_query)
     rows = result.all()
+
+    # Fast-path: first page and not full → total is exactly what we fetched.
+    if skip == 0 and len(rows) < limit:
+        total_count = len(rows)
+    else:
+        # Lightweight count: only touch Email + EmailSource (no EvidenceObject join).
+        count_base = (
+            select(func.count(Email.id))
+            .select_from(Email)
+            .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+        )
+        if requested_org_id is not None:
+            count_base = count_base.where(
+                or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None))
+            )
+        if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
+            count_base = count_base.where(EmailSource.user_id == current_user.id)
+        if analysis_status:
+            count_base = count_base.where(Email.analysis_status == analysis_status)
+        if qualification_status:
+            count_base = count_base.where(Email.qualification_status == qualification_status)
+        count_result = await db.execute(count_base)
+        total_count = count_result.scalar_one()
 
     items = []
     for row in rows:
         email = row[0]
         source = row[1] if len(row) > 1 else None
         evidence = row[2] if len(row) > 2 else None
-        org = row[3] if len(row) > 3 else None
         items.append(
             EmailDetailResponse(
                 id=str(email.id),
@@ -1098,8 +1268,15 @@ async def list_emails(
                 sha256_hash=evidence.sha256_hash if evidence else None,
                 evidence_id=str(evidence.id) if evidence else None,
                 organization_id=str(source.organization_id) if (source and source.organization_id) else (str(email.organization_id) if email.organization_id else None),
-                organization_name=org.name if org else ("Personal Workspace" if (source and source.organization_id) else "Global"),
+                organization_name="Personal Workspace" if (source and source.organization_id) else "Global",
             )
         )
 
-    return EmailListResponse(total=total_count, items=items)
+    resp = EmailListResponse(total=total_count, items=items)
+    if not analysis_status and not qualification_status:
+        _EMAIL_CACHE[list_cache_key] = (now, resp.model_dump())
+        try:
+            await redis_manager.set_json(f"cache:email:{list_cache_key}", resp.model_dump(), expire_seconds=30)
+        except Exception:
+            pass
+    return resp

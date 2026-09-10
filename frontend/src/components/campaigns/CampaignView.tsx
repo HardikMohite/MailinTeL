@@ -95,6 +95,7 @@ export const CampaignView: React.FC<CampaignViewProps> = ({ onSelectEmail }) => 
       setCampaignDetails(data);
       setError(null);
     } catch (err: any) {
+      console.warn(`Failed to fetch details for campaign ${campaignId}:`, err);
       const availableList = currentCampaignList || campaigns;
       // If 404 and fallback is available, silently switch to the first campaign
       if (err.response?.status === 404 && availableList.length > 0 && campaignId !== availableList[0].id) {
@@ -106,10 +107,29 @@ export const CampaignView: React.FC<CampaignViewProps> = ({ onSelectEmail }) => 
           setError(null);
           return;
         } catch {
-          // Fall through to standard error handler
+          // Fall through
         }
       }
-      setError(err.response?.data?.detail || err.message || 'Failed to load campaign details.');
+      // Graceful fallback: construct basic detail view from existing campaign list item so page never shows blocking Network Error
+      const found = availableList.find((c) => c.id === campaignId);
+      if (found) {
+        setCampaignDetails({
+          id: found.id,
+          campaign_name: found.campaign_name,
+          campaign_status: found.campaign_status,
+          campaign_confidence: found.campaign_confidence,
+          threat_summary: found.threat_summary,
+          first_detected_at: found.first_detected_at,
+          last_activity_at: found.last_activity_at,
+          total_members: found.member_count,
+          total_evidence_links: 0,
+          memberships: [],
+          evidence: [],
+          events: [],
+        });
+      } else {
+        setError(err.response?.data?.detail || err.message || 'Failed to load campaign details.');
+      }
     }
   };
 

@@ -71,16 +71,20 @@ async def execute_email_analysis_and_scoring(
     )
     res_evidence = await db.execute(stmt_evidence)
     evidence_objs = res_evidence.scalars().all()
-    attachments_list = [
-        {
+    attachments_list = []
+    for ev in evidence_objs:
+        meta = getattr(ev, "metadata_json", None) or {}
+        ext = meta.get("extension") if isinstance(meta, dict) else ""
+        if not ext and ev.original_filename and "." in ev.original_filename:
+            ext = ev.original_filename.rsplit(".", 1)[-1].lower()
+        is_dangerous = bool(meta.get("is_dangerous")) if isinstance(meta, dict) else False
+        attachments_list.append({
             "filename": ev.original_filename,
             "sha256_hash": ev.sha256_hash,
             "size_bytes": ev.size_bytes,
-            "is_dangerous": bool(getattr(ev, "metadata_json", None) and ev.metadata_json.get("is_dangerous")),
-            "extension": ("." + ev.original_filename.rsplit(".", 1)[-1].lower() if "." in ev.original_filename else ""),
-        }
-        for ev in evidence_objs
-    ]
+            "is_dangerous": is_dangerous,
+            "extension": ext or "",
+        })
 
     stmt_urls = (
         select(URL.normalized_url)

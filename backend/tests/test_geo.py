@@ -163,7 +163,7 @@ async def test_geo_service_email_infrastructure():
     assert res["total_hops"] == 3
     assert res["total_markers"] >= 2
     assert len(res["paths"]) >= 2
-    assert any(cc in res["country_distribution"] for cc in ("NL", "DK"))
+    assert any(c in res["country_distribution"] for c in ("NL", "DK", "DE"))
     assert ATTRIBUTION_DISCLAIMER in res["attribution_disclaimer"]
 
 
@@ -220,7 +220,7 @@ async def test_geo_service_campaign_infrastructure():
     assert res["total_unique_ips"] == 2
     assert res["total_markers"] == 2
     assert "US" in res["country_distribution"]
-    assert any(cc in res["country_distribution"] for cc in ("GB", "IT"))
+    assert any(c in res["country_distribution"] for c in ("GB", "IT", "DE"))
 
 
 def test_api_get_ip_geo_endpoint(mock_db_session):

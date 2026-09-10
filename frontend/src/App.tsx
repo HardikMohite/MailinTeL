@@ -12,7 +12,10 @@ import { EvidenceVaultView } from './components/evidence/EvidenceVaultView';
 import { ForensicReportView } from './components/reports/ForensicReportView';
 import { SettingsView } from './components/settings/SettingsView';
 import { TeamView } from './components/settings/TeamView';
+import { UserPanelView } from './components/users/UserPanelView';
+import { OrganizationView } from './components/settings/OrganizationView';
 import { PlatformAdminView } from './pages/PlatformAdminView';
+import { useAuth } from './context/AuthContext';
 import { checkHealth, checkDetailedHealth, HealthResponse, DetailedHealthResponse } from './services/api';
 import { apiEvents } from './services/apiEvents';
 import {
@@ -22,6 +25,8 @@ import {
 } from './components/errors';
 
 export const App: React.FC = () => {
+  const { user, isCrossOrg } = useAuth();
+  const isPlatformAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [detailedHealth, setDetailedHealth] = useState<DetailedHealthResponse | null>(null);
@@ -59,11 +64,20 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchHealthStatus();
+
+    // Keepalive heartbeat: ping backend health periodically when tab is active
+    // to prevent Render free-tier cloud instances from spinning down during active sessions.
+    const keepAliveInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        checkHealth().catch(() => {});
+      }
+    }, 4 * 60 * 1000); // every 4 minutes
+
+    return () => clearInterval(keepAliveInterval);
   }, []);
 
-  // Global network-failure handling: any apiClient call that gets no
-  // response at all flips the app into OfflineScreen. OfflineScreen itself
-  // polls checkHealth and calls this back the moment the backend answers.
+  // Global network-failure handling: triggered when browser connectivity is genuinely lost.
+  // OfflineScreen polls checkHealth and calls handleBackOnline the moment connection is restored.
   useEffect(() => {
     return apiEvents.on('network-error', () => setIsOffline(true));
   }, []);
@@ -72,6 +86,7 @@ export const App: React.FC = () => {
     setIsOffline(false);
     fetchHealthStatus();
   }, []);
+
 
   const handleInspectEmailInWorkspace = (emailId: string) => {
     setFocalEmailId(emailId);
@@ -94,9 +109,26 @@ export const App: React.FC = () => {
     evidence: { title: 'Evidence Vault', breadcrumb: ['MailinteL', 'Forensic Management'] },
     reports: { title: 'Reports', breadcrumb: ['MailinteL', 'Forensic Management'] },
     team: { title: 'Team & Access', breadcrumb: ['MailinteL', 'Forensic Management'] },
+    users: { title: 'User Panel', breadcrumb: ['MailinteL', 'Governance & Access'] },
+    organization: { title: 'Organization', breadcrumb: ['MailinteL', 'Governance & Access'] },
     settings: { title: 'Settings', breadcrumb: ['MailinteL', 'Forensic Management'] },
     'platform-admin': { title: 'Platform Administration', breadcrumb: ['MailinteL', 'Platform Administration'] },
   };
+
+  // Maps each breadcrumb segment label to the tab it should navigate to when clicked.
+  const BREADCRUMB_NAV: Record<string, NavTab> = {
+    'MailinteL': 'dashboard',
+    'Main': 'dashboard',
+    'Email Intelligence': 'intelligence',
+    'Forensic Management': 'evidence',
+    'Platform Administration': 'platform-admin',
+  };
+
+  const handleBreadcrumbClick = (crumb: string) => {
+    const target = BREADCRUMB_NAV[crumb];
+    if (target) setActiveTab(target);
+  };
+
   const KNOWN_TABS = Object.keys(TAB_META);
   // Defensive: activeTab is typed as NavTab today, but this guards against a
   // future tab being added to the sidebar/state without a matching branch
@@ -116,6 +148,8 @@ export const App: React.FC = () => {
           onRefreshHealth={fetchHealthStatus}
           title={isKnownTab ? TAB_META[activeTab].title : 'Not Found'}
           breadcrumb={isKnownTab ? TAB_META[activeTab].breadcrumb : ['MailinteL']}
+          onBreadcrumbClick={handleBreadcrumbClick}
+          onNavigateToSettings={() => setActiveTab('settings')}
         />
 
         <main className="flex-1 p-8 overflow-y-auto space-y-6">
@@ -128,11 +162,20 @@ export const App: React.FC = () => {
           <>
           {/* Tab Content Views */}
           {activeTab === 'dashboard' && (
-            <DashboardView
-              onAnalyze={() => setActiveTab('analyze')}
-              onExploreGraph={() => setActiveTab('graph')}
-              onSelectEmail={handleInspectEmailInWorkspace}
-            />
+            isPlatformAdmin ? (
+              <PlatformAdminView
+                onSelectEmail={handleInspectEmailInWorkspace}
+                onOpenReport={handleOpenReportForEmail}
+                onAnalyze={() => setActiveTab('analyze')}
+                onExploreGraph={() => setActiveTab('graph')}
+              />
+            ) : (
+              <DashboardView
+                onAnalyze={() => setActiveTab('analyze')}
+                onExploreGraph={() => setActiveTab('graph')}
+                onSelectEmail={handleInspectEmailInWorkspace}
+              />
+            )
           )}
           {/* Analyze Email Tab / Investigation Workspace */}
           {activeTab === 'analyze' && (
@@ -159,6 +202,7 @@ export const App: React.FC = () => {
             <AnalysisHistoryView
               onSelectEmail={handleInspectEmailInWorkspace}
               onOpenReport={handleOpenReportForEmail}
+              onNavigateToAnalyze={() => setActiveTab('analyze')}
             />
           )}
 
@@ -191,6 +235,12 @@ export const App: React.FC = () => {
 
           {/* Team & Access Tab */}
           {activeTab === 'team' && <TeamView />}
+
+          {/* User Panel Tab */}
+          {activeTab === 'users' && <UserPanelView />}
+
+          {/* Organization Tab */}
+          {activeTab === 'organization' && <OrganizationView />}
 
           {/* Platform Administration Tab */}
           {activeTab === 'platform-admin' && (

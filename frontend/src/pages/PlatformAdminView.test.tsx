@@ -60,8 +60,9 @@ describe('PlatformAdminView — access gating', () => {
     mockAuthFor('SYSTEM_ADMIN');
     render(<PlatformAdminView />);
     expect(await screen.findByText('Platform Administration')).toBeInTheDocument();
-    expect(screen.getByText('Users across organizations')).toBeInTheDocument();
-    expect(screen.getByText('Audit log')).toBeInTheDocument();
+    expect(screen.getByText('Users & Access')).toBeInTheDocument();
+    expect(screen.getByText('Organizations (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Audit log')).not.toBeInTheDocument();
   });
 
   it('does not render the admin UI for CYBER_CELL_INVESTIGATOR', () => {
@@ -85,7 +86,7 @@ describe('PlatformAdminView — invite role dropdown', () => {
     const user = userEvent.setup();
     render(<PlatformAdminView />);
 
-    const usersTab = await screen.findByRole('button', { name: /users across organizations/i });
+    const usersTab = await screen.findByRole('button', { name: /users & access/i });
     await user.click(usersTab);
     await user.click(screen.getByRole('button', { name: /invite user/i }));
 
@@ -105,6 +106,7 @@ describe('PlatformAdminView — invite role dropdown', () => {
 describe('PlatformAdminView — phishing-only triage queue', () => {
   it('requests threat_only=true and strictly filters out safe/normal emails from the triage table', async () => {
     mockAuthFor('SYSTEM_ADMIN');
+    const user = userEvent.setup();
     vi.mocked(api.listEmails).mockResolvedValue({
       total: 2,
       items: [
@@ -134,6 +136,9 @@ describe('PlatformAdminView — phishing-only triage queue', () => {
     });
 
     render(<PlatformAdminView />);
+
+    const triageTab = await screen.findByRole('button', { name: /phishing triage/i });
+    await user.click(triageTab);
 
     // Verify listEmails called with threatOnly = true (6th argument)
     expect(api.listEmails).toHaveBeenCalledWith(0, 100, undefined, undefined, undefined, true);

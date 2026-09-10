@@ -10,8 +10,6 @@ import {
   Check,
   X,
   MoreVertical,
-  ClipboardList,
-  Filter,
   Mail,
   FileText,
   Download,
@@ -20,27 +18,28 @@ import {
   Eye,
   Inbox,
   Flame,
+  LayoutDashboard,
   Activity,
 } from 'lucide-react';
+import { DashboardView } from '../components/dashboard/DashboardView';
+import { OrganizationView } from '../components/settings/OrganizationView';
 import {
   listPlatformOrganizations,
-  createPlatformOrganization,
   listPlatformUsers,
   invitePlatformUser,
   updatePlatformUserRole,
   deactivatePlatformUser,
-  listPlatformAuditLog,
   listEmails,
   getEvidenceDownloadUrl,
   EmailDetailResponse,
   OrganizationItem,
   PlatformMember,
-  AuditLogEntry,
 } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useApiErrorHandler } from '../hooks/useApiErrorHandler';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { ALL_ASSIGNABLE_ROLES, RoleCode } from '../constants/rbac';
+
 
 const ROLE_LABELS: Record<string, string> = {
   INSTITUTION_ADMIN: 'Institution Admin',
@@ -52,23 +51,25 @@ const ROLE_LABELS: Record<string, string> = {
 const roleLabel = (code: string) => ROLE_LABELS[code] || code;
 const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : 'Never');
 
-const AUDIT_PAGE_SIZE = 50;
-
 export interface PlatformAdminViewProps {
   onSelectEmail?: (emailId: string) => void;
   onOpenReport?: (emailId: string) => void;
+  onAnalyze?: () => void;
+  onExploreGraph?: () => void;
 }
 
 export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   onSelectEmail,
   onOpenReport,
+  onAnalyze,
+  onExploreGraph,
 }) => {
   const { user, isCrossOrg } = useAuth();
   const parseApiError = useApiErrorHandler();
   const canAccess = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
 
   // Navigation sub-tabs
-  const [activeSection, setActiveSection] = useState<'phishing' | 'organizations' | 'users' | 'audit'>('phishing');
+  const [activeSection, setActiveSection] = useState<'overview' | 'phishing' | 'organizations' | 'users'>('overview');
 
   // --- Phishing Email Ingestion & Triage Queue ----------------------
   const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
@@ -79,15 +80,8 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   const [emailQualFilter, setEmailQualFilter] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  // --- Organizations -------------------------------------------------
+  // --- Organizations (cached for cross-section filters) -------------
   const [organizations, setOrganizations] = useState<OrganizationItem[]>([]);
-  const [orgsLoading, setOrgsLoading] = useState(true);
-  const [orgsError, setOrgsError] = useState<string | null>(null);
-  const [showCreateOrg, setShowCreateOrg] = useState(false);
-  const [newOrgName, setNewOrgName] = useState('');
-  const [newOrgType, setNewOrgType] = useState('ENTERPRISE');
-  const [creatingOrg, setCreatingOrg] = useState(false);
-  const [createOrgError, setCreateOrgError] = useState<string | null>(null);
 
   // --- Cross-org users -------------------------------------------------
   const [members, setMembers] = useState<PlatformMember[]>([]);
@@ -107,17 +101,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
 
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-
-  // --- Audit log -------------------------------------------------
-  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
-  const [auditLoading, setAuditLoading] = useState(true);
-  const [auditError, setAuditError] = useState<string | null>(null);
-  const [auditActorId, setAuditActorId] = useState('');
-  const [auditOrgId, setAuditOrgId] = useState('');
-  const [auditAction, setAuditAction] = useState('');
-  const [auditDateFrom, setAuditDateFrom] = useState('');
-  const [auditDateTo, setAuditDateTo] = useState('');
-  const [auditLimit, setAuditLimit] = useState(AUDIT_PAGE_SIZE);
 
   // Data Loaders
   const loadEmails = useCallback(async () => {
@@ -141,17 +124,13 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   }, [emailQualFilter, emailOrgFilter, parseApiError]);
 
   const loadOrganizations = useCallback(async () => {
-    setOrgsLoading(true);
-    setOrgsError(null);
     try {
       const data = await listPlatformOrganizations();
       setOrganizations(data);
-    } catch (err) {
-      setOrgsError(parseApiError(err).message);
-    } finally {
-      setOrgsLoading(false);
+    } catch {
+      // Non-fatal fallback for dropdown filters
     }
-  }, [parseApiError]);
+  }, []);
 
   const loadMembers = useCallback(
     async (orgId: string) => {
@@ -169,35 +148,11 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     [parseApiError]
   );
 
-  const loadAuditLog = useCallback(
-    async (limit: number) => {
-      setAuditLoading(true);
-      setAuditError(null);
-      try {
-        const data = await listPlatformAuditLog({
-          actor_user_id: auditActorId.trim() || undefined,
-          organization_id: auditOrgId || undefined,
-          action: auditAction || undefined,
-          date_from: auditDateFrom ? new Date(auditDateFrom).toISOString() : undefined,
-          date_to: auditDateTo ? new Date(auditDateTo).toISOString() : undefined,
-          limit,
-        });
-        setAuditEntries(data);
-      } catch (err) {
-        setAuditError(parseApiError(err).message);
-      } finally {
-        setAuditLoading(false);
-      }
-    },
-    [auditActorId, auditOrgId, auditAction, auditDateFrom, auditDateTo, parseApiError]
-  );
-
   useEffect(() => {
     if (!canAccess) return;
     loadEmails();
     loadOrganizations();
-    loadAuditLog(AUDIT_PAGE_SIZE);
-  }, [canAccess, loadEmails, loadOrganizations, loadAuditLog]);
+  }, [canAccess, loadEmails, loadOrganizations]);
 
   useEffect(() => {
     if (!canAccess) return;
@@ -272,22 +227,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     );
   }
 
-  const handleCreateOrg = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreateOrgError(null);
-    setCreatingOrg(true);
-    try {
-      await createPlatformOrganization({ name: newOrgName.trim(), organization_type: newOrgType.trim() || undefined });
-      setNewOrgName('');
-      setNewOrgType('ENTERPRISE');
-      setShowCreateOrg(false);
-      await loadOrganizations();
-    } catch (err) {
-      setCreateOrgError(parseApiError(err).message);
-    } finally {
-      setCreatingOrg(false);
-    }
-  };
+
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -353,18 +293,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const handleAuditFilterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuditLimit(AUDIT_PAGE_SIZE);
-    loadAuditLog(AUDIT_PAGE_SIZE);
-  };
-
-  const handleLoadMoreAudit = () => {
-    const next = auditLimit + AUDIT_PAGE_SIZE;
-    setAuditLimit(next);
-    loadAuditLog(next);
-  };
-
   return (
     <div className="space-y-6">
       {/* Top Banner & Command Bar */}
@@ -389,6 +317,17 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
         {/* Navigation Switcher Pills */}
         <div className="flex items-center gap-1 bg-workspace p-1 rounded-xl border border-workspace-border text-xs font-medium">
           <button
+            onClick={() => setActiveSection('overview')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+              activeSection === 'overview'
+                ? 'bg-workspace-card text-brand font-semibold shadow-xs'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            <LayoutDashboard className="w-3.5 h-3.5" />
+            <span>System Overview</span>
+          </button>
+          <button
             onClick={() => setActiveSection('phishing')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
               activeSection === 'phishing'
@@ -397,7 +336,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             }`}
           >
             <Mail className="w-3.5 h-3.5" />
-            <span>All Phishing Emails ({emailStats.total})</span>
+            <span>Phishing Triage ({emailStats.total})</span>
           </button>
           <button
             onClick={() => setActiveSection('organizations')}
@@ -419,61 +358,103 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Users across organizations</span>
-          </button>
-          <button
-            onClick={() => setActiveSection('audit')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-              activeSection === 'audit'
-                ? 'bg-workspace-card text-brand font-semibold shadow-xs'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            <ClipboardList className="w-3.5 h-3.5" />
-            <span>Audit log</span>
+            <span>Users & Access</span>
           </button>
         </div>
       </div>
+
+      {/* SECTION 0: SYSTEM OVERVIEW & TELEMETRY */}
+      {activeSection === 'overview' && (
+        <DashboardView
+          onAnalyze={onAnalyze || (() => {})}
+          onExploreGraph={onExploreGraph || (() => {})}
+          onSelectEmail={onSelectEmail || (() => {})}
+        />
+      )}
 
       {/* SECTION 1: ALL PHISHING EMAILS & TRIAGE QUEUE */}
       {activeSection === 'phishing' && (
         <section className="space-y-4">
           {/* KPI Metrics Strip */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-            <div className="bg-workspace-card border border-workspace-border rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-text-muted">Total Phishing Threats</span>
-                <Inbox className="w-4 h-4 text-brand" />
+            <div
+              style={{ '--kpi-accent': '#2563B8' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+                  Total Phishing Threats
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-brand-soft text-brand flex items-center justify-center shrink-0">
+                  <Inbox className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-text-primary mt-2">{emailStats.total}</div>
-              <div className="text-[11px] text-text-muted mt-1">Cross-tenant threat queue</div>
+              <div>
+                <div className="text-2xl font-extrabold text-text-primary tabular-nums tracking-tight">
+                  {emailStats.total}
+                </div>
+                <div className="text-[10.5px] text-text-muted mt-1">Cross-tenant threat queue</div>
+              </div>
             </div>
 
-            <div className="bg-workspace-card border border-rose-200/80 rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-rose-600">High / Critical Phishing</span>
-                <Flame className="w-4 h-4 text-rose-600" />
+            <div
+              style={{ '--kpi-accent': '#C73A32' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-rose-600">
+                  High / Critical Phishing
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <Flame className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-rose-700 mt-2">{emailStats.criticalOrHigh}</div>
-              <div className="text-[11px] text-rose-600/80 mt-1">Confirmed or critical risk</div>
+              <div>
+                <div className="text-2xl font-extrabold text-rose-700 tabular-nums tracking-tight">
+                  {emailStats.criticalOrHigh}
+                </div>
+                <div className="text-[10.5px] text-rose-600/80 mt-1">Confirmed or critical risk</div>
+              </div>
             </div>
 
-            <div className="bg-workspace-card border border-amber-200/80 rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-amber-600">Suspicious Ingestions</span>
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <div
+              style={{ '--kpi-accent': '#D88916' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-600">
+                  Suspicious Ingestions
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-amber-700 mt-2">{emailStats.suspicious}</div>
-              <div className="text-[11px] text-amber-600/80 mt-1">Requires analyst triage</div>
+              <div>
+                <div className="text-2xl font-extrabold text-amber-700 tabular-nums tracking-tight">
+                  {emailStats.suspicious}
+                </div>
+                <div className="text-[10.5px] text-amber-600/80 mt-1">Requires analyst triage</div>
+              </div>
             </div>
 
-            <div className="bg-workspace-card border border-sky-200/80 rounded-xl p-4 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-sky-600">Active Investigations</span>
-                <Activity className="w-4 h-4 text-sky-600" />
+            <div
+              style={{ '--kpi-accent': '#0284C7' } as React.CSSProperties}
+              className="kpi-card p-4 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-600">
+                  Active Investigations
+                </span>
+                <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+                  <Activity className="w-4 h-4" />
+                </div>
               </div>
-              <div className="text-2xl font-bold text-sky-700 mt-2">{emailStats.investigating}</div>
-              <div className="text-[11px] text-sky-600/80 mt-1">Active forensic cases</div>
+              <div>
+                <div className="text-2xl font-extrabold text-sky-700 tabular-nums tracking-tight">
+                  {emailStats.investigating}
+                </div>
+                <div className="text-[10.5px] text-sky-600/80 mt-1">Active forensic cases</div>
+              </div>
             </div>
           </div>
 
@@ -684,162 +665,12 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
 
       {/* SECTION 2: ORGANIZATIONS */}
       {activeSection === 'organizations' && (
-        <section className="space-y-3">
-          <div className="bg-workspace-card border border-workspace-border rounded-xl p-5 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-brand-soft flex items-center justify-center">
-                <Building2 className="w-4 h-4 text-brand" />
-              </div>
-              <div>
-                <h3 className="text-[13.5px] font-semibold text-text-primary">Organizations</h3>
-                <p className="text-[12px] text-text-muted mt-0.5">Create and review every organization on the platform.</p>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                setShowCreateOrg(true);
-                setCreateOrgError(null);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors"
-            >
-              <Building2 className="w-4 h-4" />
-              New organization
-            </button>
-          </div>
-
-          {showCreateOrg && (
-            <div className="bg-workspace-card border border-workspace-border rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-[13.5px] font-semibold text-text-primary">Create organization</h4>
-                <button onClick={() => setShowCreateOrg(false)} className="text-text-muted hover:text-text-primary">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <form onSubmit={handleCreateOrg} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2">
-                  <label className="block text-[12px] font-medium text-text-secondary mb-1">Organization name</label>
-                  <input
-                    type="text"
-                    required
-                    value={newOrgName}
-                    onChange={(e) => setNewOrgName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-workspace-border text-[13px] focus:outline-none focus:ring-2 focus:ring-brand/30"
-                    placeholder="Acme Bank"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[12px] font-medium text-text-secondary mb-1">Type</label>
-                  <input
-                    type="text"
-                    value={newOrgType}
-                    onChange={(e) => setNewOrgType(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-workspace-border text-[13px] focus:outline-none focus:ring-2 focus:ring-brand/30"
-                    placeholder="ENTERPRISE"
-                  />
-                </div>
-                <div className="sm:col-span-3 flex items-center gap-3">
-                  <button
-                    type="submit"
-                    disabled={creatingOrg || !newOrgName.trim()}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors disabled:opacity-50"
-                  >
-                    {creatingOrg && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Create organization
-                  </button>
-                  {createOrgError && (
-                    <span className="text-[12.5px] text-severity-critical flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      {createOrgError}
-                    </span>
-                  )}
-                </div>
-              </form>
-            </div>
-          )}
-
-          {orgsError && (
-            <div className="bg-severity-critical-soft border border-severity-critical/30 rounded-xl p-4 flex items-center gap-2 text-[13px] text-severity-critical">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              {orgsError}
-            </div>
-          )}
-
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden">
-            {orgsLoading ? (
-              <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading organizations...
-              </div>
-            ) : organizations.length === 0 ? (
-              <div className="p-10 text-center text-text-muted text-[13px]">No organizations found.</div>
-            ) : (
-              <table className="w-full text-[13px]">
-                <thead className="bg-workspace-header border-b border-workspace-border">
-                  <tr className="text-left text-text-muted text-[11.5px] uppercase tracking-wide">
-                    <th className="px-4 py-2.5 font-semibold">Organization</th>
-                    <th className="px-4 py-2.5 font-semibold">Type</th>
-                    <th className="px-4 py-2.5 font-semibold">Status</th>
-                    <th className="px-4 py-2.5 font-semibold">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {organizations.map((org) => (
-                    <tr key={org.id} className="border-b border-workspace-border last:border-0 hover:bg-workspace-secondary/50">
-                      <td className="px-4 py-3 font-medium text-text-primary">{org.name}</td>
-                      <td className="px-4 py-3 text-text-secondary">{org.organization_type}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge type="severity" value={org.status === 'ACTIVE' ? 'safe' : 'critical'} label={org.status} size="sm" />
-                      </td>
-                      <td className="px-4 py-3 text-text-muted">{fmtDateTime(org.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
+        <OrganizationView />
       )}
 
       {/* SECTION 3: USERS ACROSS ORGANIZATIONS */}
       {activeSection === 'users' && (
         <section className="space-y-3">
-          <div className="bg-workspace-card border border-workspace-border rounded-xl p-5 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-brand-soft flex items-center justify-center">
-                <Users className="w-4 h-4 text-brand" />
-              </div>
-              <div>
-                <h3 className="text-[13.5px] font-semibold text-text-primary">Users across organizations</h3>
-                <p className="text-[12px] text-text-muted mt-0.5">Invite, promote, or deactivate any account on the platform.</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-[12px] text-text-muted">
-                <span>Organization</span>
-                <select
-                  value={orgFilter}
-                  onChange={(e) => setOrgFilter(e.target.value)}
-                  className="px-2 py-1.5 bg-workspace border border-workspace-border rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-                >
-                  <option value="">All organizations</option>
-                  {organizations.map((org) => (
-                    <option key={org.id} value={org.id}>
-                      {org.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                onClick={() => {
-                  setShowInvite(true);
-                  setInviteError(null);
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors"
-              >
-                <UserPlus className="w-4 h-4" />
-                Invite user
-              </button>
-            </div>
-          </div>
 
           {issuedCredential && (
             <div className="bg-severity-safe-soft border border-severity-safe/30 rounded-xl p-4 flex items-start justify-between gap-4">
@@ -952,7 +783,36 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             </div>
           )}
 
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden">
+          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden shadow-xs">
+            <div className="px-4 py-3 border-b border-workspace-border flex items-center justify-between flex-wrap gap-3">
+              <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                All Users ({members.length})
+              </span>
+              <div className="flex items-center gap-2.5">
+                <select
+                  value={orgFilter}
+                  onChange={(e) => setOrgFilter(e.target.value)}
+                  className="px-2.5 py-1.5 bg-workspace border border-workspace-border rounded-lg text-xs text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/20"
+                >
+                  <option value="">All organizations</option>
+                  {organizations.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    setShowInvite(true);
+                    setInviteError(null);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand text-white text-xs font-medium hover:bg-brand-hover transition-colors"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  Invite user
+                </button>
+              </div>
+            </div>
             {membersLoading ? (
               <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading users...
@@ -1029,151 +889,6 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
                   ))}
                 </tbody>
               </table>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* SECTION 4: AUDIT LOG */}
-      {activeSection === 'audit' && (
-        <section className="space-y-3">
-          <div className="bg-workspace-card border border-workspace-border rounded-xl p-5 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-brand-soft flex items-center justify-center">
-                <ClipboardList className="w-4 h-4 text-brand" />
-              </div>
-              <div>
-                <h3 className="text-[13.5px] font-semibold text-text-primary">Audit log</h3>
-                <p className="text-[12px] text-text-muted mt-0.5">Immutable cross-organization security event trail.</p>
-              </div>
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleAuditFilterSubmit}
-            className="bg-workspace-card border border-workspace-border rounded-xl p-4 grid grid-cols-1 sm:grid-cols-5 gap-3 text-[12.5px]"
-          >
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">Actor ID</label>
-              <input
-                type="text"
-                value={auditActorId}
-                onChange={(e) => setAuditActorId(e.target.value)}
-                placeholder="UUID"
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              />
-            </div>
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">Organization</label>
-              <select
-                value={auditOrgId}
-                onChange={(e) => setAuditOrgId(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              >
-                <option value="">All organizations</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">Action</label>
-              <input
-                type="text"
-                value={auditAction}
-                onChange={(e) => setAuditAction(e.target.value)}
-                placeholder="e.g. auth.login"
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              />
-            </div>
-            <div>
-              <label className="block text-[11.5px] font-medium text-text-secondary mb-1">From</label>
-              <input
-                type="date"
-                value={auditDateFrom}
-                onChange={(e) => setAuditDateFrom(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <label className="block text-[11.5px] font-medium text-text-secondary mb-1">To</label>
-                <input
-                  type="date"
-                  value={auditDateTo}
-                  onChange={(e) => setAuditDateTo(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-workspace-border bg-workspace text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand/25"
-                />
-              </div>
-              <button
-                type="submit"
-                className="px-3 py-1.5 rounded-lg bg-brand text-white font-medium hover:bg-brand-hover transition-colors inline-flex items-center gap-1"
-              >
-                <Filter className="w-3.5 h-3.5" />
-                Filter
-              </button>
-            </div>
-          </form>
-
-          {auditError && (
-            <div className="bg-severity-critical-soft border border-severity-critical/30 rounded-xl p-4 flex items-center gap-2 text-[13px] text-severity-critical">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              {auditError}
-            </div>
-          )}
-
-          <div className="bg-workspace-card border border-workspace-border rounded-xl overflow-hidden">
-            {auditLoading && auditEntries.length === 0 ? (
-              <div className="p-10 flex items-center justify-center text-text-muted text-[13px] gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading audit log...
-              </div>
-            ) : auditEntries.length === 0 ? (
-              <div className="p-10 text-center text-text-muted text-[13px]">No audit log entries found.</div>
-            ) : (
-              <>
-                <table className="w-full text-[12.5px]">
-                  <thead className="bg-workspace-header border-b border-workspace-border">
-                    <tr className="text-left text-text-muted text-[11px] uppercase tracking-wide">
-                      <th className="px-4 py-2.5 font-semibold">Timestamp</th>
-                      <th className="px-4 py-2.5 font-semibold">Actor</th>
-                      <th className="px-4 py-2.5 font-semibold">Action</th>
-                      <th className="px-4 py-2.5 font-semibold">Resource / Target</th>
-                      <th className="px-4 py-2.5 font-semibold">Organization</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auditEntries.map((e) => (
-                      <tr key={e.id} className="border-b border-workspace-border last:border-0 hover:bg-workspace-secondary/50">
-                        <td className="px-4 py-2.5 text-text-muted font-mono text-[11.5px] whitespace-nowrap">
-                          {fmtDateTime(e.occurred_at)}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <div className="font-medium text-text-primary">{e.actor_user_id ? `User: ${e.actor_user_id.slice(0, 8)}...` : 'System'}</div>
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-[11.5px] text-brand">{e.action}</td>
-                        <td className="px-4 py-2.5 text-text-secondary font-mono text-[11.5px] truncate max-w-[200px]">
-                          {e.resource_type ? `${e.resource_type}${e.resource_id ? `:${e.resource_id.slice(0, 8)}...` : ''}` : '—'}
-                        </td>
-                        <td className="px-4 py-2.5 text-text-muted font-mono text-[11.5px]">
-                          {e.organization_id ? (organizations.find(o => o.id === e.organization_id)?.name || `${e.organization_id.slice(0, 8)}...`) : 'Global / Platform'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="p-3 bg-workspace-header border-t border-workspace-border flex justify-center">
-                  <button
-                    onClick={handleLoadMoreAudit}
-                    disabled={auditLoading}
-                    className="text-[12.5px] text-brand hover:text-brand-hover font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
-                  >
-                    {auditLoading && <Loader2 className="w-3 h-3 animate-spin" />}
-                    Load more audit entries
-                  </button>
-                </div>
-              </>
             )}
           </div>
         </section>

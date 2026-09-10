@@ -321,12 +321,10 @@ class ForensicRAGService:
         elif threat_score >= 40:
             classification = "suspicious"
 
-        # Check for impersonation / BEC
-        reply_to = ctx.get("reply_to", "")
-        sender = ctx.get("sender", "")
-        if reply_to and sender and reply_to.lower() != sender.lower():
-            if classification == "legitimate":
-                classification = "suspicious"
+        # Check for impersonation / BEC if unauthenticated or explicitly flagged in findings
+        has_reply_mismatch_finding = any(f.get("type") == "IDENTITY_REPLY_TO_MISMATCH" for f in findings)
+        if has_reply_mismatch_finding and classification == "legitimate":
+            classification = "suspicious"
 
         reasoning = []
 
@@ -381,7 +379,7 @@ class ForensicRAGService:
                 })
 
         social_indicators = []
-        if reply_to and sender and reply_to.lower() != sender.lower():
+        if has_reply_mismatch_finding:
             social_indicators.append("Sender / Reply-To address mismatch (Impersonation vector)")
         for f in findings:
             if "urgency" in f.get("title", "").lower() or "lure" in f.get("title", "").lower():
@@ -443,7 +441,12 @@ class ForensicRAGService:
             "4. DO NOT declare an individual attacker identity or physical street address.\n"
             "5. DO NOT override deterministic findings or threat scores.\n"
             "6. Every reasoning item MUST provide concrete, verifiable forensic proof citing specific fields from the context "
-            "(e.g. hop number, IP, domain, URL, hash, or header mismatch).\n\n"
+            "(e.g. hop number, IP, domain, URL, hash, or header mismatch).\n"
+            "7. COLLABORATIVE PLATFORMS: Legitimate cloud service notifications (such as Google Drive, Google Docs, GitHub, Dropbox, Slack) "
+            "intentionally set Reply-To to the collaborative user while sending from noreply addresses. If SPF, DKIM, or DMARC pass and the sending domain is trusted, "
+            "do NOT treat this standard invitation mechanism as phishing or impersonation.\n"
+            "8. ATTACHMENT EVASION: Non-executable productivity files (.docx, .odt, .pdf, .xlsx) without active macros or malicious payloads are routine office files "
+            "and must NOT be characterized as malware evasion or double-extension attacks.\n\n"
             "You must return ONLY a valid JSON object with this EXACT structure:\n"
             "{\n"
             '  "classification": "legitimate" | "suspicious" | "phishing" | "impersonation" | "fraud" | "BEC",\n'

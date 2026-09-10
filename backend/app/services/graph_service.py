@@ -1,6 +1,6 @@
 import uuid
 import logging
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,10 +43,39 @@ def _classify_url_category(url_str: str, context: Optional[str] = None) -> str:
 
 
 
+import time
+from app.core.redis import redis_manager
+
+# High-speed in-memory L1 cache for sub-millisecond local graph retrieval
+_GRAPH_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_GRAPH_CACHE_TTL_SECONDS: float = 1800.0  # 30 minutes
+
+
 class InvestigationGraphService:
     """
     Forensic graph query and construction service connecting multi-hop investigative entities.
     """
+
+    @staticmethod
+    async def invalidate_graph_cache(email_id: Optional[uuid.UUID] = None, campaign_id: Optional[uuid.UUID] = None) -> None:
+        """Invalidates graph caches upon new email analysis or campaign updates."""
+        try:
+            # Clear L1
+            keys_to_del = [k for k in _GRAPH_CACHE.keys() if (
+                k.startswith("global:") or 
+                (email_id and f"email:{email_id}" in k) or 
+                (campaign_id and f"campaign:{campaign_id}" in k)
+            )]
+            for k in keys_to_del:
+                _GRAPH_CACHE.pop(k, None)
+
+            # Clear L2 Redis
+            if email_id:
+                await redis_manager.delete(f"cache:graph:email:{email_id}")
+            if campaign_id:
+                await redis_manager.delete(f"cache:graph:campaign:{campaign_id}")
+        except Exception as e:
+            logger.warning(f"Graph cache invalidation notice: {e}")
 
     async def _populate_email_subgraph(
         self,
@@ -354,9 +383,37 @@ class InvestigationGraphService:
         email_id: uuid.UUID,
     ) -> InvestigationGraph:
         """Constructs an investigation subgraph focused around an email."""
+        cache_key = f"email:{email_id}"
+        now = time.time()
+
+        # 1. L1 Memory Cache Hit
+        if cache_key in _GRAPH_CACHE:
+            ts, cached_data = _GRAPH_CACHE[cache_key]
+            if now - ts < _GRAPH_CACHE_TTL_SECONDS:
+                return InvestigationGraph.from_dict(cached_data)
+
+        # 2. L2 Redis Cache Hit
+        try:
+            redis_data = await redis_manager.get_json(f"cache:graph:{cache_key}")
+            if redis_data:
+                _GRAPH_CACHE[cache_key] = (now, redis_data)
+                return InvestigationGraph.from_dict(redis_data)
+        except Exception as e:
+            logger.warning(f"Redis graph lookup error: {e}")
+
         builder = InvestigationGraphBuilder()
         focal_id = await self._populate_email_subgraph(session, builder, email_id, include_correlations=True)
-        return builder.build(focal_node_id=focal_id)
+        graph = builder.build(focal_node_id=focal_id)
+
+        # Store in L1 and L2
+        graph_dict = graph.to_dict()
+        _GRAPH_CACHE[cache_key] = (now, graph_dict)
+        try:
+            await redis_manager.set_json(f"cache:graph:{cache_key}", graph_dict, expire_seconds=1800)
+        except Exception:
+            pass
+
+        return graph
 
     async def build_campaign_investigation_graph(
         self,
@@ -364,6 +421,24 @@ class InvestigationGraphService:
         campaign_id: uuid.UUID,
     ) -> Optional[InvestigationGraph]:
         """Constructs the complete multi-email, multi-artifact graph for a threat campaign."""
+        cache_key = f"campaign:{campaign_id}"
+        now = time.time()
+
+        # 1. L1 Memory Cache Hit
+        if cache_key in _GRAPH_CACHE:
+            ts, cached_data = _GRAPH_CACHE[cache_key]
+            if now - ts < _GRAPH_CACHE_TTL_SECONDS:
+                return InvestigationGraph.from_dict(cached_data)
+
+        # 2. L2 Redis Cache Hit
+        try:
+            redis_data = await redis_manager.get_json(f"cache:graph:{cache_key}")
+            if redis_data:
+                _GRAPH_CACHE[cache_key] = (now, redis_data)
+                return InvestigationGraph.from_dict(redis_data)
+        except Exception as e:
+            logger.warning(f"Redis graph lookup error: {e}")
+
         c_res = await session.execute(select(Campaign).where(Campaign.id == campaign_id))
         campaign = c_res.scalar_one_or_none()
         if not campaign:
@@ -394,7 +469,17 @@ class InvestigationGraphService:
         for eid in email_ids:
             await self._populate_email_subgraph(session, builder, eid, include_correlations=True)
 
-        return builder.build(focal_node_id=camp_node_id)
+        graph = builder.build(focal_node_id=camp_node_id)
+
+        # Store in L1 and L2
+        graph_dict = graph.to_dict()
+        _GRAPH_CACHE[cache_key] = (now, graph_dict)
+        try:
+            await redis_manager.set_json(f"cache:graph:{cache_key}", graph_dict, expire_seconds=1800)
+        except Exception:
+            pass
+
+        return graph
 
     async def build_global_investigation_graph(
         self,
@@ -410,6 +495,24 @@ class InvestigationGraphService:
         an investigation graph built from every organization's recent
         emails. Callers MUST pass the caller's organization_id.
         """
+        cache_key = f"global:{organization_id or 'all'}:{limit_emails}"
+        now = time.time()
+
+        # 1. L1 Memory Cache Hit
+        if cache_key in _GRAPH_CACHE:
+            ts, cached_data = _GRAPH_CACHE[cache_key]
+            if now - ts < 600.0:  # 10 minutes for global
+                return InvestigationGraph.from_dict(cached_data)
+
+        # 2. L2 Redis Cache Hit
+        try:
+            redis_data = await redis_manager.get_json(f"cache:graph:{cache_key}")
+            if redis_data:
+                _GRAPH_CACHE[cache_key] = (now, redis_data)
+                return InvestigationGraph.from_dict(redis_data)
+        except Exception as e:
+            logger.warning(f"Redis graph lookup error: {e}")
+
         builder = InvestigationGraphBuilder()
 
         emails_stmt = select(Email.id).order_by(Email.created_at.desc()).limit(limit_emails)
@@ -421,9 +524,20 @@ class InvestigationGraphService:
         email_ids = [r[0] for r in emails_res.all()]
 
         for eid in email_ids:
-            await self._populate_email_subgraph(session, builder, eid, include_correlations=True)
+            # For global graph, disable per-email correlation expansion to avoid N*10 SQL loop latency
+            await self._populate_email_subgraph(session, builder, eid, include_correlations=False)
 
-        return builder.build(focal_node_id=None)
+        graph = builder.build(focal_node_id=None)
+
+        # Store in L1 and L2
+        graph_dict = graph.to_dict()
+        _GRAPH_CACHE[cache_key] = (now, graph_dict)
+        try:
+            await redis_manager.set_json(f"cache:graph:{cache_key}", graph_dict, expire_seconds=600)
+        except Exception:
+            pass
+
+        return graph
 
 
 default_graph_service = InvestigationGraphService()

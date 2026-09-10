@@ -1,10 +1,12 @@
 import uuid
+import time
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 from sqlalchemy import select, and_, or_, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.redis import redis_manager
 from app.models.emails import Email, EmailSource, RelayHop, EmailRecipient
 from app.models.dna import EmailDNAProfile, EmailSimilarityLink
 from app.models.intelligence import URL, EmailURL, Domain, IPAddress
@@ -16,6 +18,15 @@ from app.campaigns.correlation_engine import default_correlation_engine, Correla
 from sqlalchemy.orm import aliased
 
 logger = logging.getLogger("mailintel.services.campaigns")
+
+
+# Fast in-memory cache for forensic bundles to eliminate redundant DB round trips
+_BUNDLE_CACHE: Dict[uuid.UUID, Tuple[float, Dict[str, Any]]] = {}
+_BUNDLE_CACHE_TTL_SECONDS: float = 1800.0  # 30 minutes
+
+# Cache for campaign details
+_CAMPAIGN_DETAILS_CACHE: Dict[uuid.UUID, Tuple[float, Dict[str, Any]]] = {}
+_CAMPAIGN_CACHE_TTL: float = 1800.0
 
 
 class CampaignCorrelationService:
@@ -33,6 +44,11 @@ class CampaignCorrelationService:
         email_id: uuid.UUID,
     ) -> Optional[Dict[str, Any]]:
         """Gathers all forensic artifacts, DNA, and metadata for correlation evaluation."""
+        now_ts = datetime.now(timezone.utc).timestamp()
+        cached = _BUNDLE_CACHE.get(email_id)
+        if cached and (now_ts - cached[0]) < _BUNDLE_CACHE_TTL_SECONDS:
+            return cached[1]
+
         email_res = await session.execute(select(Email).where(Email.id == email_id))
         email_obj = email_res.scalar_one_or_none()
         if not email_obj:
@@ -96,7 +112,7 @@ class CampaignCorrelationService:
             "temporal_fingerprint": dna_obj.temporal_fingerprint if dna_obj else {},
         } if dna_obj else None
 
-        return {
+        bundle = {
             "email_id": email_id,
             "subject": email_obj.subject,
             "sender_address": email_obj.sender_address,
@@ -107,6 +123,8 @@ class CampaignCorrelationService:
             "attachments": attachments,
             "dna_profile": dna_profile,
         }
+        _BUNDLE_CACHE[email_id] = (now_ts, bundle)
+        return bundle
 
     async def correlate_email(
         self,
@@ -116,15 +134,8 @@ class CampaignCorrelationService:
         organization_id: Optional[uuid.UUID] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Computes pairwise multi-signal correlation between source email and all other emails.
-
-        SECURITY: candidate emails are restricted to `organization_id` (the
-        caller's organization). Without this filter, correlation results —
-        including another tenant's subject lines, sender addresses, and
-        forensic evidence — would be computed against and returned about
-        emails the caller has no access to. Callers MUST pass the caller's
-        organization_id; it is optional only so existing internal callers
-        that have already scoped `email_id` themselves keep working.
+        Computes pairwise multi-signal correlation between source email and candidate emails.
+        Limits to top 30 most recent candidate emails to prevent unbounded processing latency.
         """
         source_bundle = await self._gather_email_forensic_bundle(session, email_id)
         if not source_bundle:
@@ -132,12 +143,10 @@ class CampaignCorrelationService:
 
         candidates_stmt = select(Email.id).where(Email.id != email_id)
         if organization_id is not None:
-            # NOTE: Email.organization_id is not populated at ingest time
-            # (only email_sources.organization_id is) — see emails.py upload
-            # flow — so tenant scoping must go through the source join.
             candidates_stmt = candidates_stmt.join(
                 EmailSource, EmailSource.id == Email.source_id
             ).where(EmailSource.organization_id == organization_id)
+        candidates_stmt = candidates_stmt.order_by(Email.created_at.desc()).limit(30)
         candidates_res = await session.execute(candidates_stmt)
         candidate_ids = [r[0] for r in candidates_res.all()]
 
@@ -345,6 +354,7 @@ class CampaignCorrelationService:
 
         await session.commit()
         await session.refresh(membership)
+        await self.invalidate_campaign_cache(campaign_id)
         return membership
 
     async def remove_email_from_campaign(
@@ -376,7 +386,17 @@ class CampaignCorrelationService:
             )
         )
         await session.commit()
+        await self.invalidate_campaign_cache(campaign_id)
         return del_res.rowcount > 0
+
+    @staticmethod
+    async def invalidate_campaign_cache(campaign_id: uuid.UUID) -> None:
+        """Invalidates campaign detail caches upon modification."""
+        try:
+            _CAMPAIGN_DETAILS_CACHE.pop(campaign_id, None)
+            await redis_manager.delete(f"cache:campaign:details:{campaign_id}")
+        except Exception as e:
+            logger.warning(f"Campaign cache invalidation notice: {e}")
 
     async def get_campaign_details(
         self,
@@ -384,6 +404,19 @@ class CampaignCorrelationService:
         campaign_id: uuid.UUID,
     ) -> Optional[Dict[str, Any]]:
         """Retrieves comprehensive details for a campaign with memberships, evidence, and events."""
+        now = time.time()
+        if campaign_id in _CAMPAIGN_DETAILS_CACHE:
+            ts, data = _CAMPAIGN_DETAILS_CACHE[campaign_id]
+            if now - ts < _CAMPAIGN_CACHE_TTL:
+                return data
+        try:
+            r_data = await redis_manager.get_json(f"cache:campaign:details:{campaign_id}")
+            if r_data:
+                _CAMPAIGN_DETAILS_CACHE[campaign_id] = (now, r_data)
+                return r_data
+        except Exception:
+            pass
+
         c_res = await session.execute(select(Campaign).where(Campaign.id == campaign_id))
         c = c_res.scalar_one_or_none()
         if not c:
@@ -406,7 +439,7 @@ class CampaignCorrelationService:
                 EmailAnalysis.threat_classification,
                 EmailAnalysis.threat_risk_score,
             )
-            .join(Email, Email.id == CampaignMembership.email_id)
+            .outerjoin(Email, Email.id == CampaignMembership.email_id)
             .outerjoin(EmailSource, Email.source_id == EmailSource.id)
             .outerjoin(User, EmailSource.user_id == User.id)
             .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
@@ -456,16 +489,16 @@ class CampaignCorrelationService:
             memberships_data.append({
                 "id": str(m.id),
                 "email_id": str(m.email_id),
-                "email_subject": subj,
-                "email_sender": sender,
+                "email_subject": subj or "Subject Unavailable",
+                "email_sender": sender or "Unknown Sender",
                 "submitted_by_id": str(uploader_id) if uploader_id else None,
                 "submitted_by_name": uploader_name or uploader_email or "Direct Ingest",
                 "submitted_by_email": uploader_email,
-                "membership_confidence": float(m.membership_confidence),
-                "membership_status": m.membership_status,
+                "membership_confidence": float(m.membership_confidence or 0.0),
+                "membership_status": m.membership_status or "CONFIRMED",
                 "evidence_summary": m.evidence_summary or {},
-                "created_at": (sent_at or created_at or m.created_at).isoformat() if (sent_at or created_at or m.created_at) else None,
-                "sent_at": sent_at.isoformat() if sent_at else None,
+                "created_at": (sent_at or created_at or m.created_at).isoformat() if hasattr((sent_at or created_at or m.created_at), "isoformat") else (str(sent_at or created_at or m.created_at) if (sent_at or created_at or m.created_at) else None),
+                "sent_at": sent_at.isoformat() if hasattr(sent_at, "isoformat") else (str(sent_at) if sent_at else None),
             })
 
         reporting_users = list(reporting_users_map.values())
@@ -555,10 +588,10 @@ class CampaignCorrelationService:
         evidence_data = [
             {
                 "id": str(e.id),
-                "evidence_type": e.evidence_type,
-                "confidence": float(e.confidence),
-                "explanation": e.explanation,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
+                "evidence_type": e.evidence_type or "GENERAL_CORRELATION",
+                "confidence": float(e.confidence or 0.0),
+                "explanation": e.explanation or "Correlated campaign artifact",
+                "created_at": e.created_at.isoformat() if hasattr(e.created_at, "isoformat") else (str(e.created_at) if e.created_at else None),
             }
             for e in ev_res.scalars().all()
         ]
@@ -572,22 +605,22 @@ class CampaignCorrelationService:
         events_data = [
             {
                 "id": str(evt.id),
-                "event_type": evt.event_type,
-                "occurred_at": evt.occurred_at.isoformat() if evt.occurred_at else None,
-                "description": evt.description,
+                "event_type": evt.event_type or "CAMPAIGN_DETECTED",
+                "occurred_at": evt.occurred_at.isoformat() if hasattr(evt.occurred_at, "isoformat") else (str(evt.occurred_at) if evt.occurred_at else None),
+                "description": evt.description or "",
                 "metadata": evt.metadata_json or {},
             }
             for evt in evts_res.scalars().all()
         ]
 
-        return {
+        res_dict = {
             "id": str(c.id),
-            "campaign_name": c.campaign_name,
-            "campaign_status": c.campaign_status,
-            "campaign_confidence": float(c.campaign_confidence),
-            "threat_summary": c.threat_summary,
-            "first_detected_at": real_first_detected,
-            "last_activity_at": real_last_activity,
+            "campaign_name": c.campaign_name or "Unnamed Campaign",
+            "campaign_status": c.campaign_status or "ACTIVE",
+            "campaign_confidence": float(c.campaign_confidence or 0.0),
+            "threat_summary": c.threat_summary or "",
+            "first_detected_at": real_first_detected or (c.first_detected_at.isoformat() if hasattr(c.first_detected_at, "isoformat") else (str(c.first_detected_at) if c.first_detected_at else None)),
+            "last_activity_at": real_last_activity or (c.last_activity_at.isoformat() if hasattr(c.last_activity_at, "isoformat") else (str(c.last_activity_at) if c.last_activity_at else None)),
             "total_members": len(memberships_data),
             "total_evidence_links": len(evidence_data),
             "memberships": memberships_data,
@@ -596,6 +629,12 @@ class CampaignCorrelationService:
             "evidence": evidence_data,
             "events": events_data,
         }
+        _CAMPAIGN_DETAILS_CACHE[campaign_id] = (now, res_dict)
+        try:
+            await redis_manager.set_json(f"cache:campaign:details:{campaign_id}", res_dict, expire_seconds=1800)
+        except Exception:
+            pass
+        return res_dict
 
     async def list_campaigns(
         self,

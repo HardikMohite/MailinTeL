@@ -37,26 +37,49 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Centralized handling for global session expiry and true network loss.
+// Centralized handling for global session expiry, transient retries, and genuine network loss.
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (axios.isAxiosError(error)) {
-      if (!error.response) {
-        // Only trigger full-app offline screen on genuine network disconnection,
-        // not on individual query timeouts (ECONNABORTED) or cancelled requests.
-        const isTrueNetworkLoss =
-          error.code === 'ERR_NETWORK' ||
-          (typeof window !== 'undefined' && !window.navigator.onLine);
+      const config = error.config as any;
 
-        if (isTrueNetworkLoss) {
-          apiEvents.emit('network-error');
-        }
-      } else if (error.response.status === 401) {
-        // Session is gone — stop sending a now-invalid token and let
-        // AuthContext clear its state so AuthGate switches to LoginScreen.
+      // Handle 401 Unauthorized (session expired)
+      if (error.response?.status === 401) {
         clearAuthToken();
         apiEvents.emit('unauthorized');
+        return Promise.reject(error);
+      }
+
+      // Identify transient errors that benefit from an immediate retry:
+      // - ERR_NETWORK (socket closed, cloud proxy cold start)
+      // - ECONNABORTED (request timeout)
+      // - 502 Bad Gateway / 503 Service Unavailable / 504 Gateway Timeout (Render waking up)
+      const status = error.response?.status;
+      const isTransient =
+        error.code === 'ERR_NETWORK' ||
+        error.code === 'ECONNABORTED' ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
+
+      if (config && isTransient) {
+        config._retryCount = config._retryCount || 0;
+        const maxRetries = 2;
+
+        if (config._retryCount < maxRetries) {
+          config._retryCount += 1;
+          const delayMs = config._retryCount * 1200; // 1.2s, 2.4s backoff
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return apiClient(config);
+        }
+      }
+
+      // Only trigger full-app offline screen on genuine hardware/browser network disconnection.
+      // A temporary server glitch or cold-start should never destroy the user's active page state.
+      const isBrowserOffline = typeof window !== 'undefined' && !window.navigator.onLine;
+      if (isBrowserOffline) {
+        apiEvents.emit('network-error');
       }
     }
     return Promise.reject(error);
@@ -109,6 +132,20 @@ export const getCurrentUser = async (): Promise<AuthUser> => {
   const response = await apiClient.get<AuthUser>('/auth/me');
   return response.data;
 };
+
+export const updateProfile = async (fullName: string): Promise<AuthUser> => {
+  const response = await apiClient.put<AuthUser>('/auth/profile', { full_name: fullName });
+  return response.data;
+};
+
+export const changePassword = async (payload: {
+  current_password: string;
+  new_password: string;
+}): Promise<{ status: string; message: string }> => {
+  const response = await apiClient.put<{ status: string; message: string }>('/auth/change-password', payload);
+  return response.data;
+};
+
 
 export interface HealthResponse {
   status: string;
@@ -1494,6 +1531,38 @@ export const getReportById = async (reportId: string): Promise<ReportItem> => {
   return response.data;
 };
 
+export interface ReportIntegrityVerification {
+  verified: boolean;
+  status: string;
+  entity_type: string;
+  entity_id: string;
+  report_id: string | null;
+  original_evidence_sha256: string;
+  report_artifact_sha256: string | null;
+  size_bytes: number;
+  storage_bucket: string;
+  storage_object_key: string;
+  is_immutable: boolean;
+  custody_events_count: number;
+  custody_chain_intact: boolean;
+  last_custody_action: string | null;
+  verified_at: string;
+  verification_seal: string;
+  compliance_standard: string;
+  evidentiary_disclaimer: string;
+}
+
+export const verifyEmailIntegrity = async (emailId: string): Promise<ReportIntegrityVerification> => {
+  const response = await apiClient.post<ReportIntegrityVerification>(`/reports/verify-email/${emailId}`);
+  return response.data;
+};
+
+export const verifyReportIntegrity = async (reportId: string): Promise<ReportIntegrityVerification> => {
+  const response = await apiClient.post<ReportIntegrityVerification>(`/reports/verify/${reportId}`);
+  return response.data;
+};
+
+
 // ---------------------------------------------------------------------------
 // Users & Access Management (org roster, invite, role changes, deactivation)
 // ---------------------------------------------------------------------------
@@ -1552,15 +1621,72 @@ export interface PlatformMember extends OrgMember {
   organization_id: string;
   organization_name: string;
 }
+export interface CompanyAdminPublic {
+  id: string;
+  full_name?: string | null;
+  email: string;
+}
+
 export interface OrganizationItem {
   id: string;
   name: string;
   organization_type: string;
   status: string;
   created_at: string;
+  company_admin?: CompanyAdminPublic | null;
+  member_count?: number;
 }
+
+export interface OrganizationDetail extends OrganizationItem {
+  updated_at: string;
+  members: OrgMember[];
+}
+
+export interface EligibleUser {
+  id: string;
+  email: string;
+  full_name?: string | null;
+  status: string;
+  created_at: string;
+}
+
 export const listPlatformOrganizations = async (): Promise<OrganizationItem[]> =>
   (await apiClient.get<OrganizationItem[]>('/platform/organizations')).data;
+
+export const getPlatformOrganization = async (orgId: string): Promise<OrganizationDetail> =>
+  (await apiClient.get<OrganizationDetail>(`/platform/organizations/${orgId}`)).data;
+
+export const deletePlatformOrganization = async (orgId: string, permanent: boolean = false): Promise<void> => {
+  await apiClient.delete(`/platform/organizations/${orgId}`, { params: { permanent } });
+};
+
+export const updatePlatformOrganizationStatus = async (orgId: string, status: 'ACTIVE' | 'INACTIVE'): Promise<OrganizationItem> =>
+  (await apiClient.patch<OrganizationItem>(`/platform/organizations/${orgId}/status`, { status })).data;
+
+export const listOrganizationMembers = async (orgId: string): Promise<PlatformMember[]> =>
+  (await apiClient.get<PlatformMember[]>(`/platform/organizations/${orgId}/members`)).data;
+
+export interface AssignMemberPayload {
+  user_id?: string;
+  email?: string;
+  full_name?: string;
+  role_code?: string;
+}
+
+export const assignOrganizationMember = async (orgId: string, payload: AssignMemberPayload): Promise<PlatformMember> =>
+  (await apiClient.post<PlatformMember>(`/platform/organizations/${orgId}/members`, payload)).data;
+
+
+export const assignCompanyAdmin = async (orgId: string, payload: { user_id: string }): Promise<PlatformMember> =>
+  (await apiClient.post<PlatformMember>(`/platform/organizations/${orgId}/company-admin`, payload)).data;
+
+export const removeOrganizationMember = async (orgId: string, userId: string): Promise<void> => {
+  await apiClient.delete(`/platform/organizations/${orgId}/members/${userId}`);
+};
+
+export const listEligibleUsers = async (): Promise<EligibleUser[]> =>
+  (await apiClient.get<EligibleUser[]>('/platform/eligible-users')).data;
+
 export const listPlatformUsers = async (organizationId?: string): Promise<PlatformMember[]> =>
   (await apiClient.get<PlatformMember[]>('/platform/users', { params: organizationId ? { organization_id: organizationId } : undefined })).data;
 // Deliberately NOT `InviteUserPayload & {...}` -- InviteUserPayload's
@@ -1587,6 +1713,7 @@ export interface CreateOrganizationPayload {
 }
 export const createPlatformOrganization = async (payload: CreateOrganizationPayload): Promise<OrganizationItem> =>
   (await apiClient.post<OrganizationItem>('/platform/organizations', payload)).data;
+
 
 // ---------------------------------------------------------------------------
 // Platform audit log (SYSTEM_ADMIN only) — see

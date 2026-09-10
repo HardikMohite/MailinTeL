@@ -166,7 +166,7 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         listEmails(0, 50),
         listCampaigns(undefined, 0, 50),
       ]);
-      const emailList = emailRes.status === 'fulfilled' ? emailRes.value.items || [] : [];
+      const emailList = emailRes.status === 'fulfilled' ? emailRes.value?.items || [] : [];
       const campList = campRes.status === 'fulfilled' ? campRes.value || [] : [];
       setEmails(emailList);
       setCampaigns(campList);
@@ -175,15 +175,26 @@ export const GeoIntelligenceMap: React.FC<GeoIntelligenceMapProps> = ({
         setSelectedCampaignId(initialCampaignId);
         setViewMode('campaign');
         fetchCampaignGeo(initialCampaignId);
+      } else if (initialEmailId) {
+        setSelectedEmailId(initialEmailId);
+        setViewMode('email');
+        fetchEmailGeo(initialEmailId);
+      } else if (emailList.length > 0) {
+        setSelectedEmailId(emailList[0].id);
+        setViewMode('email');
+        fetchEmailGeo(emailList[0].id);
+      } else if (campList.length > 0) {
+        setSelectedCampaignId(campList[0].id);
+        setViewMode('campaign');
+        fetchCampaignGeo(campList[0].id);
       } else {
-        const targetEmailId = initialEmailId || (emailList.length > 0 ? emailList[0].id : '');
-        if (targetEmailId) {
-          setSelectedEmailId(targetEmailId);
-          fetchEmailGeo(targetEmailId);
-        }
+        setViewMode('global');
+        fetchGlobalGeo();
       }
     } catch (err) {
       console.error('Failed to load geo context:', err);
+      setViewMode('global');
+      fetchGlobalGeo();
     }
   };
 

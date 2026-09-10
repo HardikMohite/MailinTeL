@@ -74,16 +74,22 @@ class _FakeMembership:
         self.created_at = datetime.now(timezone.utc)
 
 
-def test_list_members_forbidden_for_non_analyst_role():
-    """A bare 'USER' role (below ANALYST_ROLES) cannot list the roster."""
+def test_list_members_allowed_for_user_role():
+    """All authenticated organization members, including USER role, can view the roster in User Panel."""
     bare_user = CurrentUser(
         id=uuid.uuid4(), email="bare@mailintel.example", full_name=None,
         organization_id=TEST_ORG_ID, organization_name="Test Org", role_code="USER",
     )
-    _install(bare_user, AsyncMock())
+    user = _FakeUser()
+    role = _FakeRole("USER")
+    membership = _FakeMembership(TEST_ORG_ID, user.id, role.id)
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_make_result(all_=[(membership, user, role)]))
+    _install(bare_user, db)
     response = client.get("/api/v1/users")
     _clear()
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert len(response.json()) == 1
 
 
 def test_list_members_success():

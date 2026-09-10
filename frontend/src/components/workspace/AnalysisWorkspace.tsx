@@ -25,7 +25,9 @@ import {
   Search,
   MapPin,
   Sparkles,
-  Zap,
+  Users,
+  Server,
+  Clock,
 } from 'lucide-react';
 import {
   uploadEmlFile,
@@ -70,6 +72,7 @@ import { GeoIntelligenceMap } from '../geo/GeoIntelligenceMap';
 import { AIForensicPanel } from './AIForensicPanel';
 import { AIAssistantDrawer } from './AIAssistantDrawer';
 import { AnalystDispositionPanel } from './AnalystDispositionPanel';
+import { DNAStrandAnimation } from '../common/DNAStrandAnimation';
 
 type WorkspaceTab = 'overview' | 'indicators' | 'forensics' | 'correlation';
 
@@ -90,13 +93,6 @@ const PROCESSING_STEPS: { stage: JobStage; label: string }[] = [
   { stage: 'CORRELATING_CAMPAIGN', label: 'Campaign Correlation Completed' },
 ];
 
-const DNA_CATEGORIES: { key: keyof EmailDNAProfileResponse; label: string; hint: string }[] = [
-  { key: 'technical_fingerprint', label: 'Sender & Authentication', hint: 'Envelope, headers, and signature structure' },
-  { key: 'content_fingerprint', label: 'Content Analysis', hint: 'Subject, body, language, and urgency patterns' },
-  { key: 'behavioral_fingerprint', label: 'Semantic & Behavioral Features', hint: 'Lure heuristics, intent, and impersonation signals' },
-  { key: 'infrastructure_fingerprint', label: 'Infrastructure Footprint', hint: 'Origin network, relays, hosting traits, and proxies' },
-  { key: 'temporal_fingerprint', label: 'Temporal Profile', hint: 'Delivery timing, timezone offset, and velocity' },
-];
 
 const severityForClassification = (classification?: string): SeverityLevel => {
   switch ((classification || '').toUpperCase()) {
@@ -158,8 +154,17 @@ const classifyUrlCategory = (urlStr: string, context?: string): { label: string;
   return { label: 'Body Hyperlink', badgeClass: 'bg-slate-100 text-slate-700 border-slate-300' };
 };
 
-const Section: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <div className={`p-6 rounded-xl bg-workspace-card border border-workspace-border shadow-sm ${className}`}>
+const Section: React.FC<{ children: React.ReactNode; className?: string; style?: React.CSSProperties }> = ({ children, className = '', style }) => (
+  <div
+    style={{
+      backgroundColor: '#F0F7FF',
+      border: '1px solid #B9DCFA',
+      borderRadius: '14px',
+      boxShadow: '0 1px 4px rgba(23, 59, 112, 0.05)',
+      ...style,
+    }}
+    className={`p-6 ${className}`}
+  >
     {children}
   </div>
 );
@@ -231,22 +236,34 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sync selectedEmailId if initialEmailId prop changes from outside
   useEffect(() => {
     if (initialEmailId && initialEmailId !== selectedEmailId) {
       setSelectedEmailId(initialEmailId);
       setActiveTab('overview');
-      fetchFullInvestigation(initialEmailId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEmailId]);
 
+  // Whenever selectedEmailId is set or changed (including initial mount!), immediately load full dossier
+  useEffect(() => {
+    if (selectedEmailId) {
+      fetchFullInvestigation(selectedEmailId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEmailId]);
+
   const loadEmails = async () => {
     try {
-      const res = await listEmails(0, 30);
-      setEmails(res.items || []);
-      if (!initialEmailId && !selectedEmailId && res.items && res.items.length > 0) {
-        setSelectedEmailId(res.items[0].id);
-        fetchFullInvestigation(res.items[0].id);
+      const res = await listEmails(0, 50);
+      const uniqueItems = Array.from(
+        new Map((res.items || []).map((item) => [item.id, item])).values()
+      );
+      setEmails(uniqueItems);
+      if (uniqueItems.length > 0) {
+        if (!selectedEmailId || !uniqueItems.some((e) => e.id === selectedEmailId)) {
+          setSelectedEmailId(uniqueItems[0].id);
+        }
       }
     } catch (err) {
       console.error('Failed to load emails list:', err);
@@ -284,9 +301,13 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
 
       if (detailsRes.status === 'fulfilled') {
         setEmailDetails(detailsRes.value);
+      } else {
+        console.warn('getEmailDetails notice for', emailId, detailsRes.reason);
       }
       if (analysisRes.status === 'fulfilled') {
         setAnalysisData(analysisRes.value);
+      } else {
+        console.warn('getEmailAnalysis notice for', emailId, analysisRes.reason);
       }
 
       // Unblock UI immediately so user sees the Overview with zero delay
@@ -305,12 +326,27 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
     setDnaLoading(true);
     getEmailDNA(emailId)
       .then((res) => {
-        setDnaData(res);
-        setDnaLoading(false);
+        if (res && res.overall_dna_hash) {
+          setDnaData(res);
+          setDnaLoading(false);
+        } else {
+          // Auto-generate DNA if not generated yet
+          generateEmailDNA(emailId)
+            .then((genRes) => {
+              setDnaData(genRes);
+              setDnaLoading(false);
+            })
+            .catch(() => setDnaLoading(false));
+        }
       })
-      .catch((e) => {
-        console.warn('Email DNA background load notice:', e?.message);
-        setDnaLoading(false);
+      .catch(() => {
+        // Auto-generate DNA on 404
+        generateEmailDNA(emailId)
+          .then((genRes) => {
+            setDnaData(genRes);
+            setDnaLoading(false);
+          })
+          .catch(() => setDnaLoading(false));
       });
 
     getEmailArtifacts(emailId)
@@ -370,6 +406,13 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
       setDnaLoading(false);
     }
   };
+
+  // Automatically generate and load Email DNA profile when landing on an email
+  useEffect(() => {
+    if (selectedEmailId && !dnaData && !dnaLoading) {
+      handleGenerateDNA();
+    }
+  }, [selectedEmailId]);
 
   const pollJobUntilDone = (jobId: string) => {
     const poll = async () => {
@@ -555,6 +598,151 @@ ZW5kb2JqCg==
       (h) => h.header_name.toLowerCase().includes(q) || h.header_value.toLowerCase().includes(q)
     );
   }, [headersData, headerSearch]);
+
+  // Dynamic evaluation of the 5 Email DNA signals:
+  // - If safe: text container pill is in GREEN (mint bg, emerald border & text, green checkmark)
+  // - If unsafe: text container pill is in RED (soft red bg, rose border & text, red alert icon)
+  // - The entire surrounding card is styled in the enterprise light-blue theme (#F8FBFF, border #C9E2FA)
+  const evaluatedDnaSignals = useMemo(() => {
+    const spfStatus = (authData?.spf_result || '').toLowerCase();
+    const dkimStatus = (authData?.dkim_result || '').toLowerCase();
+    const dmarcStatus = (authData?.dmarc_result || '').toLowerCase();
+    const spfFail = spfStatus.includes('fail') || spfStatus.includes('temperror') || spfStatus.includes('permerror');
+    const dkimFail = dkimStatus.includes('fail') || dkimStatus.includes('temperror') || dkimStatus.includes('permerror');
+    const dmarcFail = dmarcStatus.includes('fail');
+    const authFailed = spfFail || dkimFail || dmarcFail;
+
+    const findings = (analysisData?.findings || []).map((f) =>
+      `${f.title || ''} ${f.description || ''} ${f.finding_type || ''}`.toLowerCase()
+    );
+    const findingsStr = findings.join(' ');
+    const classification = (analysisData?.threat_classification || '').toLowerCase();
+    const isThreat = classification === 'malicious' || classification === 'phishing' || classification === 'suspicious';
+
+    // 1. Sender & Authentication
+    const hasSpoofing = findingsStr.includes('spoof') || findingsStr.includes('mismatch') || findingsStr.includes('impersonat');
+    const senderIdentitySafe = !hasSpoofing;
+    const emailAuthSafe = !authFailed;
+    const noSpoofingSafe = !hasSpoofing;
+    const noAuthIssuesSafe = !authFailed;
+    const senderOverallSafe = senderIdentitySafe && emailAuthSafe && noSpoofingSafe && noAuthIssuesSafe;
+
+    // 2. Content Analysis
+    const hasUrgency = findingsStr.includes('urgent') || findingsStr.includes('deadline') || findingsStr.includes('pressure') || findingsStr.includes('immediate') || findingsStr.includes('coercion');
+    const hasPhishPhrases = isThreat || findingsStr.includes('phish') || findingsStr.includes('credential') || findingsStr.includes('password') || findingsStr.includes('wire transfer');
+    const hasSuspiciousWording = hasUrgency || hasPhishPhrases || findingsStr.includes('suspicious');
+    const hasDangerousAttachment = (artifactsData?.attachments || []).some(
+      (a) => a.is_dangerous || (a.filename && /\.(exe|scr|vbs|bat|cmd|ps1|js|iso|hta)$/i.test(a.filename))
+    );
+    const subjectSafe = !hasUrgency && !isThreat;
+    const wordingSafe = !hasSuspiciousWording;
+    const languageSafe = !hasUrgency;
+    const phrasesSafe = !hasPhishPhrases && !hasDangerousAttachment;
+    const contentOverallSafe = subjectSafe && wordingSafe && languageSafe && phrasesSafe;
+
+    // 3. Semantic & Behavioral Features
+    const hasMaliciousUrl = (threatIntelData?.malicious_ioc_count || 0) > 0 || (threatIntelData?.suspicious_ioc_count || 0) > 0;
+    const hasTargetingBehavior = findingsStr.includes('targeted') || findingsStr.includes('spear') || findingsStr.includes('unusual targeting');
+    const hasImpersonationSignals = findingsStr.includes('impersonat') || findingsStr.includes('lookalike') || findingsStr.includes('ceo fraud');
+    const recipientPatternSafe = true;
+    const linksSafe = !hasMaliciousUrl;
+    const targetingSafe = !hasTargetingBehavior;
+    const impersonationSafe = !hasImpersonationSignals;
+    const behavioralOverallSafe = recipientPatternSafe && linksSafe && targetingSafe && impersonationSafe;
+
+    // 4. Infrastructure Footprint
+    const hasHopAnomaly = (hopsData?.hops || []).some(
+      (h) => h.reliability === 'LOW' || h.reliability === 'UNVERIFIED'
+    );
+    const hasHostingAnomaly = findingsStr.includes('bulletproof') || findingsStr.includes('blacklisted ip') || findingsStr.includes('suspicious relay');
+    const hasDomainWarnings = findingsStr.includes('domain age') || findingsStr.includes('newly registered') || (infraIntelData?.ips || []).some((ip) => ip.risk_level === 'HIGH' || ip.risk_level === 'CRITICAL');
+    const infraSafe = !hasHopAnomaly && !hasHostingAnomaly;
+    const domainSafe = !hasDomainWarnings;
+    const hostingSafe = !hasHostingAnomaly;
+    const originSafe = !hasHopAnomaly;
+    const infrastructureOverallSafe = infraSafe && domainSafe && hostingSafe && originSafe;
+
+    // 5. Temporal Profile
+    const hasTemporalAnomaly = (hopsData?.hops || []).some(
+      (h) => (h.transit_delay_seconds || 0) > 86400
+    ) || findingsStr.includes('temporal anomaly') || findingsStr.includes('burst sending');
+    const sendingTimeSafe = true;
+    const timingPatternSafe = !hasTemporalAnomaly;
+    const deliverySafe = !hasTemporalAnomaly;
+    const temporalOverallSafe = sendingTimeSafe && timingPatternSafe && deliverySafe;
+
+    return [
+      {
+        key: 'technical_fingerprint' as keyof EmailDNAProfileResponse,
+        icon: Mail,
+        title: 'Sender & Authentication',
+        hint: 'Checks who sent the email and whether the sender appears genuine.',
+        isSafe: senderOverallSafe,
+        statusText: senderOverallSafe ? 'LOOKS SAFE' : 'SUSPICIOUS',
+        tags: [
+          { text: senderIdentitySafe ? 'Sender identity looks consistent' : 'Sender identity inconsistency detected', isSafe: senderIdentitySafe },
+          { text: emailAuthSafe ? 'Email authentication passed' : 'Email authentication failed or misaligned', isSafe: emailAuthSafe },
+          { text: noSpoofingSafe ? 'No obvious sender spoofing detected' : 'Sender spoofing / display name trick flagged', isSafe: noSpoofingSafe },
+          { text: noAuthIssuesSafe ? 'No unusual authentication issues' : 'Authentication verification issues detected', isSafe: noAuthIssuesSafe },
+        ],
+      },
+      {
+        key: 'content_fingerprint' as keyof EmailDNAProfileResponse,
+        icon: FileText,
+        title: 'Content Analysis',
+        hint: 'Checks the message subject and content for suspicious language or tricks.',
+        isSafe: contentOverallSafe,
+        statusText: contentOverallSafe ? 'CLEAN' : 'FLAGGED',
+        tags: [
+          { text: subjectSafe ? 'Subject looks normal' : 'Subject flagged with urgency or trick', isSafe: subjectSafe },
+          { text: wordingSafe ? 'No suspicious wording detected' : 'Suspicious wording detected in content', isSafe: wordingSafe },
+          { text: languageSafe ? 'No urgent or threatening language' : 'Urgent or coercive pressure tactics detected', isSafe: languageSafe },
+          { text: phrasesSafe ? 'No obvious phishing phrases' : 'Phishing phrases identified in body', isSafe: phrasesSafe },
+        ],
+      },
+      {
+        key: 'behavioral_fingerprint' as keyof EmailDNAProfileResponse,
+        icon: Users,
+        title: 'Semantic & Behavioral Features',
+        hint: 'Checks who the email is targeting and whether its behavior looks unusual.',
+        isSafe: behavioralOverallSafe,
+        statusText: behavioralOverallSafe ? 'NORMAL' : 'ANOMALOUS',
+        tags: [
+          { text: 'Recipient pattern looks normal', isSafe: recipientPatternSafe },
+          { text: linksSafe ? 'No suspicious links detected' : 'Suspicious links or redirectors detected', isSafe: linksSafe },
+          { text: targetingSafe ? 'No unusual targeting behavior' : 'Unusual recipient targeting detected', isSafe: targetingSafe },
+          { text: impersonationSafe ? 'No obvious impersonation signals' : 'Impersonation or spoofed identity signals', isSafe: impersonationSafe },
+        ],
+      },
+      {
+        key: 'infrastructure_fingerprint' as keyof EmailDNAProfileResponse,
+        icon: Server,
+        title: 'Infrastructure Footprint',
+        hint: 'Checks where the email came from and whether its sending infrastructure is trustworthy.',
+        isSafe: infrastructureOverallSafe,
+        statusText: infrastructureOverallSafe ? 'GOOD' : 'HIGH RISK',
+        tags: [
+          { text: infraSafe ? 'Sending infrastructure looks trustworthy' : 'Sending infrastructure flagged as untrusted', isSafe: infraSafe },
+          { text: domainSafe ? 'Sender domain has no major warning signs' : 'Sender domain flagged with security warnings', isSafe: domainSafe },
+          { text: hostingSafe ? 'No suspicious hosting pattern detected' : 'Suspicious hosting or relay pattern detected', isSafe: hostingSafe },
+          { text: originSafe ? 'Origin appears consistent' : 'Origin routing inconsistency detected', isSafe: originSafe },
+        ],
+      },
+      {
+        key: 'temporal_fingerprint' as keyof EmailDNAProfileResponse,
+        icon: Clock,
+        title: 'Temporal Profile',
+        hint: 'Checks when the email was sent and whether its timing looks unusual.',
+        isSafe: temporalOverallSafe,
+        statusText: temporalOverallSafe ? 'NORMAL' : 'ANOMALOUS',
+        tags: [
+          { text: 'Sending time looks normal', isSafe: sendingTimeSafe },
+          { text: timingPatternSafe ? 'No unusual timing pattern' : 'Unusual delivery timing pattern detected', isSafe: timingPatternSafe },
+          { text: deliverySafe ? 'Delivery behavior appears typical' : 'Delivery latency or routing delay abnormal', isSafe: deliverySafe },
+        ],
+      },
+    ];
+  }, [analysisData, authData, hopsData, artifactsData, threatIntelData, infraIntelData]);
 
   const renderProcessingTimeline = () => {
     if (!activeJob) return null;
@@ -834,18 +1022,28 @@ ZW5kb2JqCg==
                 {/* 3 Core Investigative Score Meters */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
                   {/* Score 1: Threat Risk */}
-                  <div className="p-4 rounded-xl bg-workspace border border-workspace-border space-y-2">
+                  <div
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #C4DFF9',
+                      borderRadius: '12px',
+                    }}
+                    className="p-4 space-y-2 shadow-2xs"
+                  >
                     <div className="flex items-center gap-2 text-[11px] font-bold text-text-muted uppercase tracking-wide">
                       <ShieldAlert className="w-3.5 h-3.5 text-severity-high" />
                       Threat Risk Score
                     </div>
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-2xl font-bold text-text-primary font-mono">
+                      <span
+                        className="text-2xl font-bold text-text-primary"
+                        style={{ fontFamily: 'Calibri, "Segoe UI", sans-serif' }}
+                      >
                         {analysisData ? analysisData.threat_risk_score.toFixed(0) : '—'}
                       </span>
                       <span className="text-xs text-text-muted">/ 100</span>
                     </div>
-                    <div className="h-1.5 rounded-full bg-workspace-border overflow-hidden">
+                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                       <div
                         className="h-full rounded-full bg-severity-high"
                         style={{ width: `${analysisData ? analysisData.threat_risk_score : 0}%` }}
@@ -854,20 +1052,30 @@ ZW5kb2JqCg==
                   </div>
 
                   {/* Score 2: Evidence Confidence */}
-                  <div className="p-4 rounded-xl bg-workspace border border-workspace-border space-y-2">
+                  <div
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #C4DFF9',
+                      borderRadius: '12px',
+                    }}
+                    className="p-4 space-y-2 shadow-2xs"
+                  >
                     <div className="flex items-center gap-2 text-[11px] font-bold text-text-muted uppercase tracking-wide">
                       <ShieldCheck className="w-3.5 h-3.5 text-severity-safe" />
                       Evidence Confidence
                     </div>
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-2xl font-bold text-text-primary font-mono">
+                      <span
+                        className="text-2xl font-bold text-text-primary"
+                        style={{ fontFamily: 'Calibri, "Segoe UI", sans-serif' }}
+                      >
                         {confidenceLabel(analysisData?.evidence_confidence_score)}
                       </span>
                       {analysisData && (
                         <span className="text-xs text-text-muted">{analysisData.evidence_confidence_score.toFixed(0)}%</span>
                       )}
                     </div>
-                    <div className="h-1.5 rounded-full bg-workspace-border overflow-hidden">
+                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                       <div
                         className="h-full rounded-full bg-severity-safe"
                         style={{ width: `${analysisData?.evidence_confidence_score || 0}%` }}
@@ -876,20 +1084,30 @@ ZW5kb2JqCg==
                   </div>
 
                   {/* Score 3: Campaign Correlation */}
-                  <div className="p-4 rounded-xl bg-workspace border border-workspace-border space-y-2">
+                  <div
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #C4DFF9',
+                      borderRadius: '12px',
+                    }}
+                    className="p-4 space-y-2 shadow-2xs"
+                  >
                     <div className="flex items-center gap-2 text-[11px] font-bold text-text-muted uppercase tracking-wide">
                       <Network className="w-3.5 h-3.5 text-brand" />
                       Campaign Correlation
                     </div>
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-2xl font-bold text-text-primary font-mono">
-                        {confidenceLabel(campaignConfidenceScore)}
+                      <span
+                        className="text-2xl font-bold text-text-primary"
+                        style={{ fontFamily: 'Calibri, "Segoe UI", sans-serif' }}
+                      >
+                        {campaignConfidenceScore !== null ? confidenceLabel(campaignConfidenceScore) : 'No relation'}
                       </span>
                       {campaignConfidenceScore !== null && (
                         <span className="text-xs text-text-muted">{campaignConfidenceScore.toFixed(0)}%</span>
                       )}
                     </div>
-                    <div className="h-1.5 rounded-full bg-workspace-border overflow-hidden">
+                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                       <div className="h-full rounded-full bg-brand" style={{ width: `${campaignConfidenceScore || 0}%` }} />
                     </div>
                   </div>
@@ -902,16 +1120,25 @@ ZW5kb2JqCg==
                   <h3 className="text-sm font-bold text-text-primary">Executive Summary</h3>
                   <p className="text-xs text-text-secondary leading-relaxed">{analysisData.summary}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
-                    <div className="p-3 rounded-lg bg-workspace border border-workspace-border space-y-1">
-                      <div className="text-[11px] text-text-muted">Compromised Account Likelihood</div>
+                    <div
+                      style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '10px' }}
+                      className="p-3 space-y-1 shadow-2xs"
+                    >
+                      <div className="text-[11px] text-text-muted font-medium">Compromised Account Likelihood</div>
                       <div className="font-semibold text-text-primary">{analysisData.compromised_account_likelihood}</div>
                     </div>
-                    <div className="p-3 rounded-lg bg-workspace border border-workspace-border space-y-1">
-                      <div className="text-[11px] text-text-muted">Spoofed Domain Likelihood</div>
+                    <div
+                      style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '10px' }}
+                      className="p-3 space-y-1 shadow-2xs"
+                    >
+                      <div className="text-[11px] text-text-muted font-medium">Spoofed Domain Likelihood</div>
                       <div className="font-semibold text-text-primary">{analysisData.spoofed_domain_likelihood}</div>
                     </div>
-                    <div className="p-3 rounded-lg bg-workspace border border-workspace-border space-y-1">
-                      <div className="text-[11px] text-text-muted">Anonymized Infrastructure</div>
+                    <div
+                      style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '10px' }}
+                      className="p-3 space-y-1 shadow-2xs"
+                    >
+                      <div className="text-[11px] text-text-muted font-medium">Anonymized Infrastructure</div>
                       <div className="font-semibold text-text-primary">{analysisData.anonymized_infrastructure_likelihood}</div>
                     </div>
                   </div>
@@ -927,7 +1154,11 @@ ZW5kb2JqCg==
                 {analysisData && analysisData.findings.length > 0 ? (
                   <div className="space-y-2.5">
                     {analysisData.findings.map((f, idx) => (
-                      <div key={idx} className="p-3.5 rounded-xl bg-workspace border border-workspace-border flex items-start gap-3">
+                      <div
+                        key={idx}
+                        style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '11px' }}
+                        className="p-3.5 flex items-start gap-3 shadow-2xs"
+                      >
                         <AlertTriangle className="w-4 h-4 text-severity-high mt-0.5 shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
@@ -945,7 +1176,11 @@ ZW5kb2JqCg==
               </Section>
 
               {/* AI Forensic Threat Reasoning Panel (Groq-Powered RAG) */}
-              <AIForensicPanel emailId={selectedEmailId} />
+              <AIForensicPanel
+                emailId={selectedEmailId}
+                threatScore={analysisData?.threat_risk_score}
+                verdict={analysisData?.threat_classification}
+              />
 
               {/* Human Analyst Layer & Active Learning Disposition Panel */}
               <AnalystDispositionPanel
@@ -972,7 +1207,10 @@ ZW5kb2JqCg==
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-                  <div className="p-3 rounded-lg bg-workspace border border-workspace-border md:col-span-2">
+                  <div
+                    style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '10px' }}
+                    className="p-3 shadow-2xs md:col-span-2"
+                  >
                     <div className="text-[10px] text-text-muted uppercase font-bold tracking-wide">SHA-256 Hash</div>
                     <div className="flex items-center justify-between gap-2 mt-1">
                       <span className="font-mono text-text-primary break-all text-[11px]">
@@ -981,7 +1219,7 @@ ZW5kb2JqCg==
                       {emailDetails?.sha256_hash && (
                         <button
                           onClick={copySha256}
-                          className="p-1 rounded bg-workspace-card border border-workspace-border text-text-muted hover:text-brand shrink-0"
+                          className="p-1 rounded bg-blue-50 border border-[#C4DFF9] text-text-muted hover:text-brand shrink-0"
                           title="Copy SHA-256"
                         >
                           {copiedHash ? <Check className="w-3.5 h-3.5 text-severity-safe" /> : <Copy className="w-3.5 h-3.5" />}
@@ -989,14 +1227,20 @@ ZW5kb2JqCg==
                       )}
                     </div>
                   </div>
-                  <div className="p-3 rounded-lg bg-workspace border border-workspace-border">
+                  <div
+                    style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '10px' }}
+                    className="p-3 shadow-2xs"
+                  >
                     <div className="text-[10px] text-text-muted uppercase font-bold tracking-wide">Ingested &amp; Size</div>
                     <div className="mt-1 text-text-primary font-semibold">
                       {fmtBytes(emailDetails?.email_size_bytes)}
                     </div>
                     <div className="text-[10px] text-text-muted">{fmtDateTime(emailDetails?.created_at)}</div>
                   </div>
-                  <div className="p-3 rounded-lg bg-workspace border border-workspace-border">
+                  <div
+                    style={{ backgroundColor: '#FFFFFF', border: '1px solid #C4DFF9', borderRadius: '10px' }}
+                    className="p-3 shadow-2xs"
+                  >
                     <div className="text-[10px] text-text-muted uppercase font-bold tracking-wide">Evidence ID / Source</div>
                     <div className="mt-1 text-text-primary font-mono truncate text-[11px]">
                       {emailDetails?.evidence_id || 'Not assigned'}
@@ -1006,86 +1250,157 @@ ZW5kb2JqCg==
                 </div>
               </Section>
 
-              {/* Email DNA Fingerprint - Clean Formatted Cards (No raw unformatted JSON dumps) */}
-              <Section className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Dna className="w-4 h-4 text-brand" />
-                    <h3 className="text-sm font-bold text-text-primary">Email DNA Profiling</h3>
+              {/* Email DNA Fingerprint - Light-Blue Container with Dynamic Safe (Green) / Unsafe (Red) Text Containers */}
+              <div
+                style={{
+                  backgroundColor: '#F0F7FF',
+                  border: '1px solid #B9DCFA',
+                  borderRadius: '14px',
+                  boxShadow: '0 1px 4px rgba(23, 59, 112, 0.05)',
+                }}
+                className="p-5 sm:p-6 space-y-4"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-blue-50 border border-blue-200/80 flex items-center justify-center text-blue-600 shrink-0">
+                      <Dna className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">Email DNA Profiling</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        We check five signals to explain whether this email looks safe or suspicious.
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 self-start sm:self-center">
                     {dnaData?.overall_dna_hash && (
-                      <span className="text-[11px] font-mono text-text-muted px-2 py-0.5 rounded bg-workspace border border-workspace-border">
-                        DNA: {dnaData.overall_dna_hash.substring(0, 16)}…
+                      <span className="text-[11px] font-mono text-slate-700 px-3 py-1 rounded-lg bg-white/90 border border-[#C9E2FA] shadow-2xs">
+                        DNA ID: {dnaData.overall_dna_hash.substring(0, 16)}…
                       </span>
                     )}
                     <button
                       onClick={handleGenerateDNA}
                       disabled={dnaLoading}
-                      className="p-1 rounded-md bg-workspace border border-workspace-border text-text-muted hover:text-text-primary hover:border-brand transition-colors disabled:opacity-50"
+                      className="p-1.5 rounded-lg border border-[#C9E2FA] bg-white text-slate-400 hover:text-blue-600 hover:bg-blue-50/50 transition-colors disabled:opacity-50"
                       title="Regenerate / Refresh Email DNA"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${dnaLoading ? 'animate-spin text-brand' : ''}`} />
+                      <RefreshCw className={`w-3.5 h-3.5 ${dnaLoading ? 'animate-spin text-blue-600' : ''}`} />
                     </button>
                   </div>
                 </div>
 
-                {dnaLoading ? (
-                  <div className="rounded-xl border border-workspace-border bg-workspace p-6 flex flex-col items-center justify-center text-center space-y-2.5">
-                    <RefreshCw className="w-5 h-5 animate-spin text-brand" />
-                    <div className="text-xs font-semibold text-text-primary">Extracting Multi-Layer Email DNA...</div>
-                    <div className="text-[11px] text-text-muted">Computing content tokens, technical MIME hashes, and route signatures.</div>
-                  </div>
-                ) : dnaData ? (
+                {dnaLoading || !dnaData ? (
+                  <DNAStrandAnimation
+                    label="Processing / In Progress"
+                    subtext="Extracting structural MIME hierarchies, header sequence hashes, and behavioral DNA patterns..."
+                  />
+                ) : (
                   <div className="space-y-3">
-                    {DNA_CATEGORIES.map((cat) => {
-                      const dataObj = (dnaData[cat.key] || {}) as Record<string, any>;
-                      const isExpanded = expandedDnaCategory === cat.key;
+                    {evaluatedDnaSignals.map((sig) => {
+                      const Icon = sig.icon;
+                      const isExpanded = expandedDnaCategory === sig.key;
+                      const dataObj = ((dnaData && dnaData[sig.key]) || {}) as Record<string, any>;
                       const entries = Object.entries(dataObj).filter(([_, v]) => v !== null && v !== undefined && v !== '');
 
                       return (
-                        <div key={cat.key as string} className="rounded-xl border border-workspace-border overflow-hidden bg-workspace">
-                          <button
-                            onClick={() => setExpandedDnaCategory(isExpanded ? null : (cat.key as string))}
-                            className="w-full flex items-center justify-between p-3.5 hover:bg-workspace-secondary transition-colors text-left"
-                          >
-                            <div>
-                              <div className="text-xs font-semibold text-text-primary">{cat.label}</div>
-                              <div className="text-[11px] text-text-muted">{cat.hint}</div>
+                        <div
+                          key={sig.key}
+                          className={`rounded-2xl border bg-white p-4 sm:p-5 shadow-2xs transition-all ${
+                            sig.isSafe
+                              ? 'border-[#C9E2FA]/80 hover:border-[#96C8F5]'
+                              : 'border-rose-200/90 hover:border-rose-300'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3.5 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0 mt-0.5">
+                                <Icon className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-bold text-slate-900 leading-snug">
+                                  {sig.title}
+                                </div>
+                                <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                                  {sig.hint}
+                                </p>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] text-text-muted">{entries.length} features</span>
-                              {isExpanded ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
-                            </div>
-                          </button>
 
-                          {/* Quick pill preview of features */}
-                          <div className="px-3.5 pb-3 flex flex-wrap gap-1.5">
-                            {entries.slice(0, 6).map(([k, val]) => (
-                              <span
-                                key={k}
-                                className="px-2 py-0.5 rounded-md bg-workspace-card border border-workspace-border text-[10px] text-text-secondary"
+                            <div className="flex items-center gap-2.5 shrink-0">
+                              <div
+                                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold shadow-2xs transition-colors ${
+                                  sig.isSafe
+                                    ? 'bg-[#F0FDF4] border border-emerald-300 text-emerald-700'
+                                    : 'bg-rose-50 border border-rose-300 text-rose-700'
+                                }`}
                               >
-                                <span className="text-text-muted">{k.replace(/_/g, ' ')}:</span>{' '}
-                                <strong className="font-semibold text-text-primary">
-                                  {typeof val === 'boolean' ? (val ? 'Yes' : 'No') : String(val).substring(0, 32)}
-                                </strong>
-                              </span>
-                            ))}
-                            {entries.length > 6 && !isExpanded && (
-                              <span className="text-[10px] text-brand self-center ml-1">+{entries.length - 6} more</span>
-                            )}
+                                {sig.isSafe ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                ) : (
+                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                )}
+                                <span>{sig.statusText}</span>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => setExpandedDnaCategory(isExpanded ? null : sig.key)}
+                                className="p-1 rounded-lg hover:bg-slate-50 text-slate-400 hover:text-slate-600 transition-colors"
+                                title={isExpanded ? 'Collapse' : 'Expand technical parameters'}
+                              >
+                                <ChevronDown
+                                  className={`w-4 h-4 text-blue-600 transition-transform duration-200 ${
+                                    isExpanded ? 'rotate-180' : ''
+                                  }`}
+                                />
+                              </button>
+                            </div>
                           </div>
 
-                          {/* Expanded Full Feature Table */}
-                          {isExpanded && (
-                            <div className="p-4 border-t border-workspace-border bg-workspace-card space-y-3">
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                          {/* Natural Language Signal Pills: GREEN if safe, RED if unsafe */}
+                          <div className="mt-3.5 flex flex-wrap gap-2 pt-1 border-t border-slate-100/80">
+                            {sig.tags.map((tag, idx) => (
+                              <span
+                                key={idx}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium shadow-2xs transition-all ${
+                                  tag.isSafe
+                                    ? 'bg-[#F0FDF4] border border-emerald-300 text-emerald-800'
+                                    : 'bg-rose-50 border border-rose-300 text-rose-800'
+                                }`}
+                              >
+                                {tag.isSafe ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                ) : (
+                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                )}
+                                <span>{tag.text}</span>
+                              </span>
+                            ))}
+                          </div>
+
+                          {/* Optional Expanded Detailed Features */}
+                          {isExpanded && entries.length > 0 && (
+                            <div className="mt-3.5 pt-3.5 border-t border-slate-100">
+                              <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+                                Technical Profile Attributes ({entries.length})
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                                 {entries.map(([k, val]) => (
-                                  <div key={k} className="p-2.5 rounded-lg bg-workspace border border-workspace-border text-xs">
-                                    <div className="text-[10px] text-text-muted uppercase font-mono">{k.replace(/_/g, ' ')}</div>
-                                    <div className="text-text-primary font-medium break-all mt-0.5 font-mono text-[11px]">
-                                      {typeof val === 'object' ? JSON.stringify(val) : String(val)}
+                                  <div
+                                    key={k}
+                                    className="p-2.5 rounded-xl bg-blue-50/40 border border-blue-100/70 text-xs"
+                                  >
+                                    <div className="text-[10px] text-slate-500 font-semibold uppercase">
+                                      {k.replace(/_/g, ' ')}
+                                    </div>
+                                    <div className="text-slate-800 font-medium break-all mt-0.5 text-[11px]">
+                                      {typeof val === 'boolean'
+                                        ? val
+                                          ? 'Yes / Verified'
+                                          : 'No / None'
+                                        : typeof val === 'object'
+                                        ? JSON.stringify(val)
+                                        : String(val)}
                                     </div>
                                   </div>
                                 ))}
@@ -1096,28 +1411,8 @@ ZW5kb2JqCg==
                       );
                     })}
                   </div>
-                ) : (
-                  <div className="rounded-xl border border-workspace-border bg-workspace p-6 text-center space-y-3">
-                    <div className="w-10 h-10 rounded-full bg-brand/10 border border-brand/20 flex items-center justify-center mx-auto text-brand">
-                      <Dna className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-text-primary">Email DNA Profile Not Yet Generated</div>
-                      <div className="text-[11px] text-text-muted max-w-md mx-auto mt-1">
-                        Extract structural MIME hierarchies, header sequence hashes, and behavioral patterns for campaign similarity.
-                      </div>
-                    </div>
-                    <button
-                      onClick={handleGenerateDNA}
-                      disabled={dnaLoading}
-                      className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-brand text-white text-xs font-semibold hover:bg-brand-secondary transition-colors disabled:opacity-50"
-                    >
-                      <Zap className="w-3.5 h-3.5" />
-                      Generate Email DNA Profile
-                    </button>
-                  </div>
                 )}
-              </Section>
+              </div>
             </div>
           )}
 

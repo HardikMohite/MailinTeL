@@ -65,29 +65,35 @@ async def get_current_user(
     except (jwt.PyJWTError, KeyError, ValueError, TypeError):
         raise _CREDENTIALS_EXCEPTION
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    # Single query: fetch User and their first active membership in one round-trip.
+    stmt = (
+        select(User, OrganizationMember, Organization, Role)
+        .outerjoin(
+            OrganizationMember,
+            (OrganizationMember.user_id == User.id) & (OrganizationMember.status == "ACTIVE"),
+        )
+        .outerjoin(Organization, OrganizationMember.organization_id == Organization.id)
+        .outerjoin(Role, OrganizationMember.role_id == Role.id)
+        .where(User.id == user_id)
+        .order_by(OrganizationMember.created_at.asc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+
+    if row is None:
+        raise _CREDENTIALS_EXCEPTION
+
+    user, membership, organization, role = row
+
     if user is None or user.status != "ACTIVE":
         raise _CREDENTIALS_EXCEPTION
 
     org_id: Optional[uuid.UUID] = None
     org_name: Optional[str] = None
-    # A platform administrator may intentionally have no organization
-    # membership. The dedicated flag is resolved before org-scoped roles so a
-    # pure platform account is never silently downgraded to USER.
     role_code = "SYSTEM_ADMIN" if getattr(user, "is_platform_admin", False) else "USER"
 
-    membership_stmt = (
-        select(OrganizationMember, Organization, Role)
-        .join(Organization, OrganizationMember.organization_id == Organization.id)
-        .join(Role, OrganizationMember.role_id == Role.id)
-        .where(OrganizationMember.user_id == user.id, OrganizationMember.status == "ACTIVE")
-        .order_by(OrganizationMember.created_at.asc())
-    )
-    membership_res = await db.execute(membership_stmt)
-    row = membership_res.first()
-    if row:
-        membership, organization, role = row
+    if membership is not None and organization is not None and role is not None:
         if organization.status == "ACTIVE" and role_code != "SYSTEM_ADMIN":
             org_id = organization.id
             org_name = organization.name
@@ -274,8 +280,16 @@ async def get_authorized_campaign(
     if not campaign:
         raise not_found
 
-    if current_user.role_code not in CROSS_ORG_ROLES:
-        if campaign.organization_id is None or campaign.organization_id != current_user.organization_id:
+    if campaign.organization_id is not None:
+        if (
+            current_user.role_code not in CROSS_ORG_ROLES
+            and campaign.organization_id != current_user.organization_id
+        ):
+            raise not_found
+    else:
+        # System-level, global cluster, or seeded campaign with null organization_id.
+        # Allow analyst and admin roles to inspect it.
+        if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
             raise not_found
 
     # SCOPING: a plain USER account may only reach a campaign if it

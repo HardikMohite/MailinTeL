@@ -12,6 +12,15 @@ VT_API_BASE_URL = "https://www.virustotal.com/api/v3"
 DEFAULT_TIMEOUT = 5.0
 
 
+TRUSTED_GLOBAL_DOMAINS = {
+    "google.com", "gmail.com", "microsoft.com", "office.com", "outlook.com",
+    "apple.com", "icloud.com", "amazon.com", "aws.amazon.com", "github.com",
+    "cloudflare.com", "yahoo.com", "zoom.us", "dropbox.com", "box.com",
+    "atlassian.net", "jira.com", "salesforce.com", "docs.google.com", "drive.google.com",
+    "sakec.ac.in",
+}
+
+
 class VirusTotalAdapter(BaseThreatIntelAdapter):
     """
     Adapter for VirusTotal v3 API.
@@ -49,8 +58,19 @@ class VirusTotalAdapter(BaseThreatIntelAdapter):
         undetected = stats.get("undetected", 0)
         total = malicious + suspicious + harmless + undetected
 
+        val_lower = indicator_value.strip().lower()
+        is_trusted = False
+        if indicator_type == "DOMAIN":
+            is_trusted = val_lower in TRUSTED_GLOBAL_DOMAINS or any(val_lower.endswith("." + d) for d in TRUSTED_GLOBAL_DOMAINS)
+
         tags = []
-        if malicious >= 3:
+        # For trusted infrastructure, isolated single-engine noise is ignored unless confirmed by >= 5 engines
+        if is_trusted and malicious < 5:
+            verdict = "BENIGN"
+            threat_score = 0.0
+            confidence = 0.95
+            tags.append("VERIFIED_TRUSTED_INFRASTRUCTURE")
+        elif malicious >= 3:
             verdict = "MALICIOUS"
             threat_score = min(100.0, 50.0 + (malicious * 5.0))
             confidence = min(0.98, 0.70 + (malicious * 0.03))
@@ -60,12 +80,13 @@ class VirusTotalAdapter(BaseThreatIntelAdapter):
             verdict = "BENIGN"
             threat_score = 0.0
             confidence = 0.90
-        elif (malicious >= 2) or (suspicious >= 3) or (malicious == 1 and harmless < 5):
+        elif (malicious >= 2) or (malicious >= 1 and suspicious >= 2) or (suspicious >= 4):
             verdict = "SUSPICIOUS"
-            threat_score = min(60.0, 30.0 + ((malicious + suspicious) * 10.0))
+            threat_score = min(60.0, 25.0 + ((malicious + suspicious) * 5.0))
             confidence = 0.65
             tags.append("SUSPICIOUS_DETECTION")
-        elif harmless >= 5:
+        elif harmless >= 3 or total >= 10:
+            # If dozens of engines scanned and < 2 reported suspicious, it is benign
             verdict = "BENIGN"
             threat_score = 0.0
             confidence = 0.85

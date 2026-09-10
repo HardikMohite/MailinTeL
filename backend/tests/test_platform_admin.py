@@ -57,7 +57,11 @@ def _make_result(*, scalar_one_or_none=None, scalar_one=None, first=None, all_=N
     result.scalar_one.return_value = scalar_one
     result.first.return_value = first
     result.all.return_value = all_ or []
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = all_ or []
+    result.scalars.return_value = scalars_mock
     return result
+
 
 
 class _FakeOrg:
@@ -79,6 +83,7 @@ class _FakeUser:
         self.last_login_at = None
         self.password_hash = None
         self.is_platform_admin = False
+        self.created_at = datetime.now(timezone.utc)
 
 
 class _FakeRole:
@@ -365,6 +370,19 @@ _RBAC_TARGET_USER_ID = uuid.uuid4()
 PLATFORM_ROUTES = (
     ("post", "/api/v1/platform/organizations", {"name": "Some Org", "organization_type": "ENTERPRISE"}),
     ("get", "/api/v1/platform/organizations", None),
+    ("get", f"/api/v1/platform/organizations/{TARGET_ORG_ID}", None),
+    ("delete", f"/api/v1/platform/organizations/{TARGET_ORG_ID}", None),
+    ("patch", f"/api/v1/platform/organizations/{TARGET_ORG_ID}/status", {"status": "ACTIVE"}),
+    ("get", f"/api/v1/platform/organizations/{TARGET_ORG_ID}/members", None),
+    ("post", f"/api/v1/platform/organizations/{TARGET_ORG_ID}/members", {
+        "user_id": str(_RBAC_TARGET_USER_ID),
+        "role_code": "SECURITY_ANALYST",
+    }),
+    ("post", f"/api/v1/platform/organizations/{TARGET_ORG_ID}/company-admin", {
+        "user_id": str(_RBAC_TARGET_USER_ID),
+    }),
+    ("delete", f"/api/v1/platform/organizations/{TARGET_ORG_ID}/members/{_RBAC_TARGET_USER_ID}", None),
+    ("get", "/api/v1/platform/eligible-users", None),
     ("get", "/api/v1/platform/users", None),
     ("post", "/api/v1/platform/users/invite", {
         "email": "invitee@mailintel.example",
@@ -375,6 +393,7 @@ PLATFORM_ROUTES = (
     ("delete", f"/api/v1/platform/users/{_RBAC_TARGET_USER_ID}", None),
     ("get", "/api/v1/platform/audit-log", None),
 )
+
 
 
 def _role_user(role_code):
@@ -596,3 +615,229 @@ def test_platform_deactivate_user_blocks_self_removal():
     resp = client.delete(f"/api/v1/platform/users/{PLATFORM_ADMIN.id}")
     _clear()
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Organization Management Tests
+# ---------------------------------------------------------------------------
+
+def test_delete_organization_soft_deactivation():
+    org = _FakeOrg(org_id=TARGET_ORG_ID, name="To Deactivate")
+    memberships = [_FakeMembership(TARGET_ORG_ID, uuid.uuid4(), uuid.uuid4())]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(scalar_one_or_none=org),
+        _make_result(all_=memberships),
+    ])
+    db.commit = AsyncMock()
+    _install(PLATFORM_ADMIN, db)
+
+    with patch("app.core.audit.record_audit", new=AsyncMock()) as mock_audit:
+        resp = client.delete(f"/api/v1/platform/organizations/{TARGET_ORG_ID}?permanent=false")
+
+    _clear()
+    assert resp.status_code == 204
+    assert org.status == "INACTIVE"
+    for m in memberships:
+        assert m.status == "INACTIVE"
+    mock_audit.assert_awaited_once()
+
+
+def test_delete_organization_permanent_removal():
+    org = _FakeOrg(org_id=TARGET_ORG_ID, name="To Delete")
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(scalar_one_or_none=org),
+    ])
+    db.delete = AsyncMock()
+    db.commit = AsyncMock()
+    _install(PLATFORM_ADMIN, db)
+
+    with patch("app.core.audit.record_audit", new=AsyncMock()) as mock_audit:
+        resp = client.delete(f"/api/v1/platform/organizations/{TARGET_ORG_ID}?permanent=true")
+
+    _clear()
+    assert resp.status_code == 204
+    db.delete.assert_awaited_once_with(org)
+    mock_audit.assert_awaited_once()
+
+
+def test_delete_organization_blocks_current_user_org():
+    current_admin = CurrentUser(
+        id=uuid.uuid4(),
+        email="admin@mailintel.test",
+        full_name="Admin",
+        organization_id=TARGET_ORG_ID,
+        organization_name="Target Org",
+        role_code="SYSTEM_ADMIN",
+    )
+    org = _FakeOrg(org_id=TARGET_ORG_ID)
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_make_result(scalar_one_or_none=org))
+    _install(current_admin, db)
+
+    resp = client.delete(f"/api/v1/platform/organizations/{TARGET_ORG_ID}")
+    _clear()
+
+    assert resp.status_code == 400
+    assert "currently operating in" in resp.json()["error"]
+
+
+def test_assign_organization_member():
+    org = _FakeOrg(org_id=TARGET_ORG_ID)
+    user = _FakeUser(email="member@mailintel.example")
+    role = _FakeRole("SECURITY_ANALYST")
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(scalar_one_or_none=org),
+        _make_result(scalar_one_or_none=user),
+        _make_result(scalar_one_or_none=role),
+        _make_result(scalar_one_or_none=None),  # no existing membership
+    ])
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    _install(PLATFORM_ADMIN, db)
+
+    with patch("app.core.audit.record_audit", new=AsyncMock()) as mock_audit:
+        resp = client.post(
+            f"/api/v1/platform/organizations/{TARGET_ORG_ID}/members",
+            json={"user_id": str(user.id), "role_code": "SECURITY_ANALYST"},
+        )
+    _clear()
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["email"] == user.email
+    assert data["role"] == "SECURITY_ANALYST"
+    assert data["organization_id"] == str(TARGET_ORG_ID)
+    mock_audit.assert_awaited_once()
+
+
+def test_assign_organization_member_by_email_with_default_user_role():
+    org = _FakeOrg(org_id=TARGET_ORG_ID)
+    user_role = _FakeRole("USER")
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(scalar_one_or_none=org),
+        _make_result(scalar_one_or_none=None),  # user not found, so auto-provisions
+        _make_result(scalar_one_or_none=user_role),
+        _make_result(scalar_one_or_none=None),  # no existing membership
+    ])
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    _install(PLATFORM_ADMIN, db)
+
+    with patch("app.core.audit.record_audit", new=AsyncMock()) as mock_audit:
+        resp = client.post(
+            f"/api/v1/platform/organizations/{TARGET_ORG_ID}/members",
+            json={"email": "new.teammate@example.com", "full_name": "New Teammate"},
+        )
+    _clear()
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["email"] == "new.teammate@example.com"
+    assert data["role"] == "USER"
+    assert data["organization_id"] == str(TARGET_ORG_ID)
+    mock_audit.assert_awaited_once()
+
+
+
+def test_assign_company_admin_persists_institution_admin_strictly():
+    org = _FakeOrg(org_id=TARGET_ORG_ID)
+    user = _FakeUser(email="newadmin@mailintel.example")
+    admin_role = _FakeRole("INSTITUTION_ADMIN")
+    analyst_role = _FakeRole("SECURITY_ANALYST")
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(scalar_one_or_none=org),
+        _make_result(scalar_one_or_none=user),
+        _make_result(scalar_one_or_none=admin_role),
+        _make_result(scalar_one_or_none=analyst_role),
+        _make_result(all_=[]),  # existing admins to demote
+        _make_result(scalar_one_or_none=None),  # no existing membership for target user
+    ])
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    _install(PLATFORM_ADMIN, db)
+
+    with patch("app.core.audit.record_audit", new=AsyncMock()) as mock_audit:
+        resp = client.post(
+            f"/api/v1/platform/organizations/{TARGET_ORG_ID}/company-admin",
+            json={"user_id": str(user.id)},
+        )
+    _clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["email"] == user.email
+    assert data["role"] == "INSTITUTION_ADMIN"
+    # CRITICAL: Company Admin must NOT be elevated to platform admin
+    assert user.is_platform_admin is False
+    mock_audit.assert_awaited_once()
+
+
+def test_remove_organization_member():
+    target_user_id = uuid.uuid4()
+    analyst_role = _FakeRole("SECURITY_ANALYST")
+    membership = _FakeMembership(TARGET_ORG_ID, target_user_id, analyst_role.id)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(first=(membership, analyst_role)),
+    ])
+    db.commit = AsyncMock()
+    _install(PLATFORM_ADMIN, db)
+
+    with patch("app.core.audit.record_audit", new=AsyncMock()) as mock_audit:
+        resp = client.delete(
+            f"/api/v1/platform/organizations/{TARGET_ORG_ID}/members/{target_user_id}"
+        )
+    _clear()
+
+    assert resp.status_code == 204
+    assert membership.status == "INACTIVE"
+    mock_audit.assert_awaited_once()
+
+
+def test_list_eligible_users():
+    users = [_FakeUser(email="u1@mailintel.example"), _FakeUser(email="u2@mailintel.example")]
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_make_result(all_=users))
+    _install(PLATFORM_ADMIN, db)
+
+    resp = client.get("/api/v1/platform/eligible-users")
+    _clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["email"] == "u1@mailintel.example"
+
+
+def test_list_organizations_excludes_personal_workspaces():
+    org1 = _FakeOrg(org_id=uuid.uuid4(), name="Corp Org")
+    org1.organization_type = "ENTERPRISE"
+    
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[
+        _make_result(all_=[org1]),
+        _make_result(all_=[]),
+        _make_result(all_=[]),
+    ])
+    _install(PLATFORM_ADMIN, db)
+
+    resp = client.get("/api/v1/platform/organizations")
+    _clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Corp Org"
+
+
