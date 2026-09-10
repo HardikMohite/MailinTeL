@@ -158,9 +158,16 @@ async def run_full_email_analysis_pipeline(job_id: str, email_id: str) -> Dict[s
         logger.exception(f"Campaign correlation failed for {email_id}: {exc}")
         summary["stages_failed"].append({"stage": "campaign_correlation", "error": str(exc)})
 
-    # Invalidate cached report data so next view immediately reflects updated pipeline findings
+    # Invalidate all caches across panels so next views reflect updated pipeline findings
     try:
+        from app.services.report_service import ReportService
+        from app.services.graph_service import InvestigationGraphService
+        from app.services.geo_service import GeolocationService
+        from app.api.v1.endpoints.emails import invalidate_email_metadata_cache
         await ReportService.invalidate_report_cache(email_uuid)
+        await InvestigationGraphService.invalidate_graph_cache(email_id=email_uuid)
+        await GeolocationService.invalidate_geo_cache(email_id=email_uuid)
+        await invalidate_email_metadata_cache(email_uuid)
     except Exception as inv_err:
         logger.debug(f"Cache invalidation notice for {email_id}: {inv_err}")
 

@@ -1,10 +1,11 @@
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 from sqlalchemy import select, and_, or_, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.redis import redis_manager
 from app.models.emails import Email, EmailSource, RelayHop
 from app.models.dna import EmailDNAProfile, EmailSimilarityLink
 from app.models.intelligence import URL, EmailURL, Domain, IPAddress
@@ -18,6 +19,10 @@ logger = logging.getLogger("mailintel.services.campaigns")
 # Fast in-memory cache for forensic bundles to eliminate redundant DB round trips
 _BUNDLE_CACHE: Dict[uuid.UUID, Tuple[float, Dict[str, Any]]] = {}
 _BUNDLE_CACHE_TTL_SECONDS: float = 1800.0  # 30 minutes
+
+# Cache for campaign details
+_CAMPAIGN_DETAILS_CACHE: Dict[uuid.UUID, Tuple[float, Dict[str, Any]]] = {}
+_CAMPAIGN_CACHE_TTL: float = 1800.0
 
 
 class CampaignCorrelationService:
@@ -333,6 +338,7 @@ class CampaignCorrelationService:
 
         await session.commit()
         await session.refresh(membership)
+        await self.invalidate_campaign_cache(campaign_id)
         return membership
 
     async def remove_email_from_campaign(
@@ -364,7 +370,17 @@ class CampaignCorrelationService:
             )
         )
         await session.commit()
+        await self.invalidate_campaign_cache(campaign_id)
         return del_res.rowcount > 0
+
+    @staticmethod
+    async def invalidate_campaign_cache(campaign_id: uuid.UUID) -> None:
+        """Invalidates campaign detail caches upon modification."""
+        try:
+            _CAMPAIGN_DETAILS_CACHE.pop(campaign_id, None)
+            await redis_manager.delete(f"cache:campaign:details:{campaign_id}")
+        except Exception as e:
+            logger.warning(f"Campaign cache invalidation notice: {e}")
 
     async def get_campaign_details(
         self,
@@ -372,6 +388,19 @@ class CampaignCorrelationService:
         campaign_id: uuid.UUID,
     ) -> Optional[Dict[str, Any]]:
         """Retrieves comprehensive details for a campaign with memberships, evidence, and events."""
+        now = time.time()
+        if campaign_id in _CAMPAIGN_DETAILS_CACHE:
+            ts, data = _CAMPAIGN_DETAILS_CACHE[campaign_id]
+            if now - ts < _CAMPAIGN_CACHE_TTL:
+                return data
+        try:
+            r_data = await redis_manager.get_json(f"cache:campaign:details:{campaign_id}")
+            if r_data:
+                _CAMPAIGN_DETAILS_CACHE[campaign_id] = (now, r_data)
+                return r_data
+        except Exception:
+            pass
+
         c_res = await session.execute(select(Campaign).where(Campaign.id == campaign_id))
         c = c_res.scalar_one_or_none()
         if not c:
@@ -428,7 +457,7 @@ class CampaignCorrelationService:
             for evt in evts_res.scalars().all()
         ]
 
-        return {
+        res_dict = {
             "id": str(c.id),
             "campaign_name": c.campaign_name,
             "campaign_status": c.campaign_status,
@@ -442,6 +471,12 @@ class CampaignCorrelationService:
             "evidence": evidence_data,
             "events": events_data,
         }
+        _CAMPAIGN_DETAILS_CACHE[campaign_id] = (now, res_dict)
+        try:
+            await redis_manager.set_json(f"cache:campaign:details:{campaign_id}", res_dict, expire_seconds=1800)
+        except Exception:
+            pass
+        return res_dict
 
     async def list_campaigns(
         self,
