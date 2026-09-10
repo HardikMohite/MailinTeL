@@ -14,9 +14,9 @@ echo "====================================================="
 pip install -r backend/requirements.txt
 
 echo "====================================================="
-echo "==> [3/3] Checking MaxMind GeoIP/ASN intelligence..."
+echo "==> [3/3] Deploying MaxMind GeoLite2 (City & ASN)..."
 echo "====================================================="
-python backend/scripts/setup_maxmind.py || true
+python backend/scripts/setup_maxmind.py --download || true
 
 echo "====================================================="
 echo "==> Render build finished successfully!"
