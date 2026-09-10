@@ -11,7 +11,8 @@ import {
   FileText,
   Settings,
   Users,
-  ShieldCheck,
+  UserCheck,
+  Building2,
   ExternalLink,
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
@@ -28,8 +29,10 @@ export type NavTab =
   | 'evidence'
   | 'reports'
   | 'team'
-  | 'platform-admin'
-  | 'settings';
+  | 'users'
+  | 'organization'
+  | 'settings'
+  | 'platform-admin';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -56,44 +59,71 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   // than re-deriving cross-org membership here.
   const canAccessPlatformAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
 
-  const sections: NavSection[] = [
-    ...(canAccessPlatformAdmin
-      ? [
-          {
-            title: 'Admin Command',
-            items: [
-              { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
-            ],
-          },
-        ]
-      : []),
-    {
-      title: 'Investigation Operations',
-      items: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'analyze', label: 'Email Investigation', icon: UploadCloud },
-        { id: 'history', label: 'Analysis History', icon: History },
-      ],
-    },
-    {
-      title: 'Threat Intelligence',
-      items: [
-        { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
-        { id: 'campaigns', label: 'Campaign Clusters', icon: Flag },
-        { id: 'graph' as const, label: 'Investigation Graph', icon: Network },
-        { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
-      ],
-    },
-    {
-      title: 'Forensic Management',
-      items: [
-        { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
-        { id: 'reports', label: 'Forensic Reports', icon: FileText },
-        ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
-        { id: 'settings', label: 'Settings', icon: Settings },
-      ],
-    },
-  ];
+  const sections: NavSection[] = canAccessPlatformAdmin
+    ? [
+        {
+          title: 'Admin Command',
+          items: [
+            { id: 'dashboard', label: 'Admin Dashboard', icon: LayoutDashboard },
+          ],
+        },
+        {
+          title: 'Investigation Operations',
+          items: [
+            { id: 'history', label: 'Analysis History', icon: History },
+            { id: 'campaigns', label: 'Campaign', icon: Flag },
+            { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
+            { id: 'reports', label: 'Forensic Reports', icon: FileText },
+          ],
+        },
+        {
+          title: 'Threat Intelligence',
+          items: [
+            { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
+            { id: 'graph' as const, label: 'Investigation Graph', icon: Network },
+            { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
+          ],
+        },
+        {
+          title: 'Governance & Access',
+          items: [
+            ...(canManageTeam ? [{ id: 'users' as const, label: 'User Panel', icon: Users }] : []),
+            ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: UserCheck }] : []),
+            { id: 'organization' as const, label: 'Organization', icon: Building2 },
+            { id: 'settings', label: 'Settings', icon: Settings },
+          ],
+        },
+      ]
+    : [
+        {
+          title: 'Investigation Operations',
+          items: [
+            { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+            { id: 'analyze', label: 'Email Investigation', icon: UploadCloud },
+            { id: 'history', label: 'Analysis History', icon: History },
+          ],
+        },
+        {
+          title: 'Threat Intelligence',
+          items: [
+            { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
+            { id: 'campaigns', label: 'Campaign Clusters', icon: Flag },
+            { id: 'graph' as const, label: 'Investigation Graph', icon: Network },
+            { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
+          ],
+        },
+        {
+          title: 'Forensic Management',
+          items: [
+            { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
+            { id: 'reports', label: 'Forensic Reports', icon: FileText },
+            { id: 'users' as const, label: 'User Panel', icon: Users },
+            ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: UserCheck }] : []),
+            ...(canManageTeam ? [{ id: 'organization' as const, label: 'Organization', icon: Building2 }] : []),
+            { id: 'settings', label: 'Settings', icon: Settings },
+          ],
+        },
+      ];
 
   return (
     <aside className="w-[232px] bg-navy-sidebar text-text-dark flex flex-col h-screen sticky top-0 border-r border-navy-border select-none z-20 shrink-0">

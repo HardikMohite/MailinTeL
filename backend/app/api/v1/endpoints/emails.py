@@ -514,6 +514,17 @@ async def upload_eml_file(
 
     await db.commit()
 
+    from app.core.audit import record_audit
+    await record_audit(
+        db,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        action="UPLOAD",
+        resource_type="EMAIL",
+        resource_id=email_id,
+        metadata_json={"filename": filename, "size_bytes": size_bytes},
+    )
+
     # 5. Parse email structure and persist headers/recipients into DB
     try:
         await parse_and_persist_email(email_id=email_id, raw_bytes=content, db=db)
@@ -1155,6 +1166,7 @@ async def list_emails(
     analysis_status: Optional[str] = Query(default=None, description="Filter by analysis status"),
     qualification_status: Optional[str] = Query(default=None, description="Filter by qualification status"),
     organization_id: Optional[uuid.UUID] = Query(default=None, description="Optional organization filter for cross-org roles"),
+    threat_only: bool = Query(default=False, description="Filter to only threat/phishing emails (excludes NORMAL, SAFE, BENIGN)"),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> EmailListResponse:
@@ -1172,8 +1184,7 @@ async def list_emails(
 
     # Fast 30s caching for default paginated listings across panels (Dashboard, Vault, Workspace)
     list_cache_key = f"list:{requested_org_id or 'all'}:{current_user.id if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES else 'org'}:{skip}:{limit}"
-    now = time.time()
-    if not analysis_status and not qualification_status:
+    if not analysis_status and not qualification_status and not threat_only:
         if list_cache_key in _EMAIL_CACHE:
             ts, data = _EMAIL_CACHE[list_cache_key]
             if now - ts < 30.0:
@@ -1204,6 +1215,8 @@ async def list_emails(
         list_query = list_query.where(Email.analysis_status == analysis_status)
     if qualification_status:
         list_query = list_query.where(Email.qualification_status == qualification_status)
+    if threat_only:
+        list_query = list_query.where(Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]))
 
     paginated_query = list_query.offset(skip).limit(limit)
     result = await db.execute(paginated_query)

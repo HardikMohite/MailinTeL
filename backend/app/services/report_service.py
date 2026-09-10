@@ -14,10 +14,13 @@ from app.models.emails import Email, EmailRecipient, EmailAuthenticationResult, 
 from app.models.evidence import EvidenceObject, CustodyEvent
 from app.models.analysis import EmailAnalysis, AnalysisFinding
 from app.models.reports import Report
-from app.models.intelligence import Domain, URL, EmailURL, IPAddress, Geolocation, EntityGeolocation
+from app.models.intelligence import (
+    Domain, DomainRegistrationIntel, DomainDNSRecord, URL, EmailURL, IPAddress, Geolocation, EntityGeolocation
+)
 from app.models.indicators import ThreatIndicator, IndicatorSighting
 from app.models.dna import EmailDNAProfile, EmailSimilarityLink
 from app.models.campaign import Campaign, CampaignMembership
+from app.services.pdf_report_service import PDFReportService
 
 logger = logging.getLogger("mailintel.reports")
 
@@ -278,6 +281,118 @@ class ReportService:
                 "isp": ev_dict.get("isp"),
             })
 
+        # 11. Fetch Sender Domain Intelligence
+        sender_domain = ""
+        if email.sender_address and "@" in email.sender_address:
+            sender_domain = email.sender_address.split("@")[-1].strip().lower()
+
+        root_domain = sender_domain
+        if sender_domain:
+            try:
+                from app.parser.header_analyzer import get_organizational_domain
+                root_domain = get_organizational_domain(sender_domain)
+            except Exception:
+                parts = sender_domain.split(".")
+                root_domain = ".".join(parts[-2:]) if len(parts) >= 2 else sender_domain
+
+        domain_intel_data: Dict[str, Any] = {
+            "domain": sender_domain or "Unknown",
+            "root_domain": root_domain or "Unknown",
+            "registrar": "Not Disclosed / Privacy Protected",
+            "registered_at": None,
+            "expires_at": None,
+            "domain_age_days": None,
+            "domain_age_str": "Active Domain",
+            "mx_servers": [],
+            "nameservers": [],
+            "ip_addresses": [],
+            "is_punycode": False,
+            "is_dynamic_dns": False,
+            "is_nrd": False,
+            "domain_type": "Standard Domain",
+            "safety_status": "CLEAN / SAFE",
+        }
+
+        if sender_domain:
+            if sender_domain.startswith("xn--") or ".xn--" in sender_domain:
+                domain_intel_data["is_punycode"] = True
+                domain_intel_data["safety_status"] = "ALERT (PUNYCODE)"
+
+            free_providers = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "zoho.com", "proton.me", "protonmail.com"}
+            esp_providers = {"brevosend.com", "sendinblue.com", "sendgrid.net", "mailgun.org", "constantcontact.com", "hubspot.com", "mandrillapp.com"}
+
+            if root_domain in free_providers:
+                domain_intel_data["domain_type"] = "Public Free Webmail"
+            elif root_domain in esp_providers or any(esp in sender_domain for esp in ["brevosend", "sendgrid", "mailgun"]):
+                domain_intel_data["domain_type"] = "Commercial ESP Relay"
+            else:
+                domain_intel_data["domain_type"] = "Custom / Corporate Infrastructure"
+
+            # Query Domain in DB
+            stmt_dom = select(Domain).where(Domain.normalized_domain == sender_domain)
+            res_dom = await db.execute(stmt_dom)
+            dom_record = res_dom.scalar_one_or_none()
+
+            if not dom_record and root_domain != sender_domain:
+                stmt_dom = select(Domain).where(Domain.normalized_domain == root_domain)
+                res_dom = await db.execute(stmt_dom)
+                dom_record = res_dom.scalar_one_or_none()
+
+            if dom_record:
+                # Query registration intel
+                stmt_reg = select(DomainRegistrationIntel).where(DomainRegistrationIntel.domain_id == dom_record.id).limit(1)
+                res_reg = await db.execute(stmt_reg)
+                reg_record = res_reg.scalar_one_or_none()
+
+                if reg_record:
+                    if reg_record.registrar:
+                        domain_intel_data["registrar"] = reg_record.registrar
+                    if reg_record.registered_at:
+                        domain_intel_data["registered_at"] = reg_record.registered_at.isoformat()
+                        now_utc = datetime.now(timezone.utc)
+                        reg_dt = reg_record.registered_at if reg_record.registered_at.tzinfo else reg_record.registered_at.replace(tzinfo=timezone.utc)
+                        age_days = max(0, (now_utc - reg_dt).days)
+                        domain_intel_data["domain_age_days"] = age_days
+                        if age_days < 30:
+                            domain_intel_data["domain_age_str"] = f"{age_days} days (Newly Registered!)"
+                            domain_intel_data["is_nrd"] = True
+                            domain_intel_data["safety_status"] = "HIGH RISK (NEW DOMAIN)"
+                        elif age_days < 365:
+                            domain_intel_data["domain_age_str"] = f"{age_days} days (~{age_days // 30} months)"
+                        else:
+                            years = age_days // 365
+                            rem_months = (age_days % 365) // 30
+                            domain_intel_data["domain_age_str"] = f"{age_days} days (~{years}y {rem_months}m)"
+
+                    if reg_record.expires_at:
+                        domain_intel_data["expires_at"] = reg_record.expires_at.isoformat()
+
+                    if reg_record.nameservers and isinstance(reg_record.nameservers, dict):
+                        ns_list = reg_record.nameservers.get("nameservers", [])
+                        if isinstance(ns_list, list):
+                            domain_intel_data["nameservers"] = ns_list
+                    elif isinstance(reg_record.nameservers, list):
+                        domain_intel_data["nameservers"] = reg_record.nameservers
+
+                # Query DNS records
+                stmt_dns = select(DomainDNSRecord).where(DomainDNSRecord.domain_id == dom_record.id)
+                res_dns = await db.execute(stmt_dns)
+                for rec in res_dns.scalars().all():
+                    if rec.record_type == "MX":
+                        val = rec.record_value.strip()
+                        parts = val.split()
+                        clean_mx = parts[-1].rstrip(".") if len(parts) > 1 else val.rstrip(".")
+                        if clean_mx not in domain_intel_data["mx_servers"]:
+                            domain_intel_data["mx_servers"].append(clean_mx)
+                    elif rec.record_type in ("A", "AAAA"):
+                        val = rec.record_value.strip()
+                        if val not in domain_intel_data["ip_addresses"]:
+                            domain_intel_data["ip_addresses"].append(val)
+                    elif rec.record_type == "NS" and not domain_intel_data["nameservers"]:
+                        val = rec.record_value.strip().rstrip(".")
+                        if val not in domain_intel_data["nameservers"]:
+                            domain_intel_data["nameservers"].append(val)
+
         report_timestamp = datetime.now(timezone.utc).isoformat()
 
         return {
@@ -335,6 +450,7 @@ class ReportService:
             "geo_intelligence": {
                 "locations": geo_list,
             },
+            "domain_intelligence": domain_intel_data,
             "limitations_and_disclaimer": {
                 "disclaimer": ATTRIBUTION_DISCLAIMER,
                 "uncertainty_notes": [
@@ -1446,6 +1562,11 @@ class ReportService:
         """Renders canonical indented JSON report."""
         return json.dumps(data, indent=2, sort_keys=False, default=str)
 
+    @staticmethod
+    def render_pdf_report(data: Dict[str, Any]) -> bytes:
+        """Renders official strictly 2-page MailinTeL forensic PDF dossier."""
+        return PDFReportService.render_pdf_report(data)
+
     @classmethod
     async def generate_and_save_email_report(
         cls,
@@ -1464,16 +1585,22 @@ class ReportService:
             rendered_content = cls.render_markdown_report(report_data)
             content_type = "text/markdown"
             ext = "md"
+            content_bytes = rendered_content.encode("utf-8")
         elif format_type_normalized == "json":
             rendered_content = cls.render_json_report(report_data)
             content_type = "application/json"
             ext = "json"
+            content_bytes = rendered_content.encode("utf-8")
+        elif format_type_normalized == "pdf":
+            content_bytes = cls.render_pdf_report(report_data)
+            rendered_content = ""
+            content_type = "application/pdf"
+            ext = "pdf"
         else:
             rendered_content = cls.render_html_report(report_data)
             content_type = "text/html"
             ext = "html"
-
-        content_bytes = rendered_content.encode("utf-8")
+            content_bytes = rendered_content.encode("utf-8")
         sha256_hash = hashlib.sha256(content_bytes).hexdigest()
         report_id = uuid.uuid4()
         now_utc = datetime.now(timezone.utc)

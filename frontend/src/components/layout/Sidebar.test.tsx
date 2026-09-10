@@ -29,34 +29,110 @@ function mockAuthFor(role: string) {
   } as any);
 }
 
-describe('Sidebar — Platform Admin nav item', () => {
-  it('is visible for SYSTEM_ADMIN', () => {
+describe('Sidebar — Admin Dashboard nav item', () => {
+  it('is visible as Admin Dashboard for SYSTEM_ADMIN under Admin Command', () => {
     mockAuthFor('SYSTEM_ADMIN');
     render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
-    expect(screen.getByText('Platform Admin')).toBeInTheDocument();
+    expect(screen.getByText('Admin Dashboard')).toBeInTheDocument();
+    expect(screen.queryByText('Platform Admin')).not.toBeInTheDocument();
   });
 
-  it('is hidden for CYBER_CELL_INVESTIGATOR (cross-org, but not a platform admin)', () => {
+  it('is standard Dashboard for CYBER_CELL_INVESTIGATOR (cross-org, but not a platform admin)', () => {
     mockAuthFor('CYBER_CELL_INVESTIGATOR');
     render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
-    expect(screen.queryByText('Platform Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin Dashboard')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard')).toBeInTheDocument();
   });
 
-  it('is hidden for INSTITUTION_ADMIN', () => {
+  it('is standard Dashboard for INSTITUTION_ADMIN', () => {
     mockAuthFor('INSTITUTION_ADMIN');
     render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
-    expect(screen.queryByText('Platform Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin Dashboard')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard')).toBeInTheDocument();
   });
 
-  it('is hidden for SECURITY_ANALYST', () => {
+  it('is standard Dashboard for SECURITY_ANALYST', () => {
     mockAuthFor('SECURITY_ANALYST');
     render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
-    expect(screen.queryByText('Platform Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin Dashboard')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard')).toBeInTheDocument();
   });
 
-  it('is hidden for USER', () => {
+  it('is standard Dashboard for USER', () => {
     mockAuthFor('USER');
     render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
-    expect(screen.queryByText('Platform Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin Dashboard')).not.toBeInTheDocument();
+    expect(screen.getByText('Dashboard')).toBeInTheDocument();
   });
 });
+
+describe('Sidebar — Admin Panel Information Architecture', () => {
+  it('removes Email Investigation and displays Campaign in Investigation Operations for SYSTEM_ADMIN', () => {
+    mockAuthFor('SYSTEM_ADMIN');
+    render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
+
+    // CHANGE 1: Email Investigation is removed from Admin Panel
+    expect(screen.queryByText('Email Investigation')).not.toBeInTheDocument();
+
+    // CHANGE 2 & 3: Campaign Clusters is renamed to exactly 'Campaign' and moved into Investigation Operations
+    expect(screen.getByText('Campaign')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign Clusters')).not.toBeInTheDocument();
+
+    // Verify other Investigation Operations items are present
+    expect(screen.getByText('Analysis History')).toBeInTheDocument();
+    expect(screen.getByText('Evidence Vault')).toBeInTheDocument();
+    expect(screen.getByText('Forensic Reports')).toBeInTheDocument();
+
+    // Verify Threat Intelligence items are present
+    expect(screen.getByText('IOC Threat Intel')).toBeInTheDocument();
+    expect(screen.getByText('Investigation Graph')).toBeInTheDocument();
+    expect(screen.getByText('Geo Transmission Map')).toBeInTheDocument();
+  });
+
+  it('preserves Email Investigation and Campaign Clusters in analyst panel', () => {
+    mockAuthFor('SECURITY_ANALYST');
+    render(<Sidebar activeTab="dashboard" onTabChange={() => {}} />);
+
+    // Preserved for analyst-facing workflow
+    expect(screen.getByText('Email Investigation')).toBeInTheDocument();
+    expect(screen.getByText('Campaign Clusters')).toBeInTheDocument();
+  });
+
+  it('renders Organization between Team & Access and Settings in Governance & Access with active styling', () => {
+    const onTabChange = vi.fn();
+    mockAuthFor('SYSTEM_ADMIN');
+    render(<Sidebar activeTab="organization" onTabChange={onTabChange} />);
+
+    // Verify Organization is present
+    const orgItem = screen.getByText('Organization');
+    expect(orgItem).toBeInTheDocument();
+
+    // Verify Team & Access and Settings are present
+    const teamItem = screen.getByText('Team & Access');
+    const settingsItem = screen.getByText('Settings');
+    expect(teamItem).toBeInTheDocument();
+    expect(settingsItem).toBeInTheDocument();
+
+    // Verify order: Team & Access precedes Organization, which precedes Settings
+    const allButtons = screen.getAllByRole('button');
+    const buttonTexts = allButtons.map((b) => b.textContent?.trim() || '');
+    const teamIndex = buttonTexts.findIndex((t) => t.includes('Team & Access'));
+    const orgIndex = buttonTexts.findIndex((t) => t.includes('Organization'));
+    const settingsIndex = buttonTexts.findIndex((t) => t.includes('Settings'));
+
+    expect(teamIndex).toBeGreaterThan(-1);
+    expect(orgIndex).toBeGreaterThan(teamIndex);
+    expect(settingsIndex).toBeGreaterThan(orgIndex);
+
+    // Verify active styling on activeTab === 'organization'
+    const orgButton = orgItem.closest('button');
+    expect(orgButton).toHaveClass('bg-brand');
+    expect(orgButton).toHaveClass('text-white');
+
+    // Verify clicking Organization fires onTabChange
+    orgButton?.click();
+    expect(onTabChange).toHaveBeenCalledWith('organization');
+  });
+});
+
+

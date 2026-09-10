@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Search, Bell, RefreshCw, Circle, ChevronDown, LogOut, Settings } from 'lucide-react';
 import { HealthResponse } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import { OrganizationSwitcher } from './OrganizationSwitcher';
 
 interface HeaderProps {
   health: HealthResponse | null;
@@ -38,27 +37,27 @@ export const Header: React.FC<HeaderProps> = ({
             {i > 0 && <span className="text-text-muted">/</span>}
             {onBreadcrumbClick && i < breadcrumb.length ? (
               <button
+                type="button"
                 onClick={() => onBreadcrumbClick(crumb)}
                 className={`hover:text-text-primary transition-colors ${
-                  i === breadcrumb.length - 1 ? 'text-text-secondary' : 'text-text-muted'
+                  i === breadcrumb.length - 1 && !title ? 'text-text-secondary' : 'text-text-muted'
                 }`}
               >
                 {crumb}
               </button>
             ) : (
-              <span className={i === breadcrumb.length - 1 ? 'text-text-secondary' : 'text-text-muted'}>
+              <span className={i === breadcrumb.length - 1 && !title ? 'text-text-secondary' : 'text-text-muted'}>
                 {crumb}
               </span>
             )}
           </React.Fragment>
         ))}
-        <span className="text-text-muted">/</span>
-        <span className="font-semibold text-text-primary truncate">{title}</span>
+        {breadcrumb.length > 0 && title && <span className="text-text-muted">/</span>}
+        {title && <span className="font-semibold text-text-primary truncate">{title}</span>}
       </div>
 
       {/* Right side: search, system status, notifications, profile */}
       <div className="flex items-center gap-4 shrink-0">
-        <OrganizationSwitcher />
         <div className="relative hidden lg:block w-72">
           <Search className="w-4 h-4 text-text-muted absolute left-3 top-1/2 -translate-y-1/2" />
           <input

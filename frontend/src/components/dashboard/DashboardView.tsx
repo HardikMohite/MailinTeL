@@ -1,31 +1,36 @@
 import React, { useEffect, useState } from 'react';
-import { UploadCloud, Network, FileText, ShieldAlert, Inbox, ArrowRight } from 'lucide-react';
-import { BrandLogo } from '../common/BrandLogo';
+import { FileText, ShieldAlert, Inbox, ArrowRight, Users, Building2, Flag } from 'lucide-react';
 import { StatusBadge } from '../common/StatusBadge';
 import {
   listEmails,
   listCampaigns,
   listReports,
+  listPlatformUsers,
+  listPlatformOrganizations,
   EmailDetailResponse,
   CampaignListItemResponse,
 } from '../../services/api';
 
 interface DashboardViewProps {
-  onAnalyze: () => void;
-  onExploreGraph: () => void;
+  onAnalyze?: () => void;
+  onExploreGraph?: () => void;
   onSelectEmail: (emailId: string) => void;
 }
 
-const THREAT_STATUSES = new Set(['SUSPICIOUS', 'HIGH_RISK', 'MALICIOUS', 'CAMPAIGN_RELATED']);
+const THREAT_STATUSES = new Set(['SUSPICIOUS', 'HIGH_RISK', 'MALICIOUS', 'CAMPAIGN_RELATED', 'CRITICAL']);
+const SAFE_STATUSES = new Set(['NORMAL', 'SAFE', 'BENIGN']);
 
 const severityForQualification = (status: string): 'critical' | 'high' | 'medium' | 'low' | 'safe' => {
   switch (status) {
     case 'MALICIOUS':
+    case 'CRITICAL':
       return 'critical';
     case 'HIGH_RISK':
+    case 'HIGH':
       return 'high';
     case 'SUSPICIOUS':
     case 'CAMPAIGN_RELATED':
+    case 'MEDIUM':
       return 'medium';
     case 'QUALIFIED_FOR_INVESTIGATION':
       return 'low';
@@ -44,11 +49,12 @@ const timeAgo = (iso: string): string => {
   return `${Math.floor(hrs / 24)}d ago`;
 };
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ onAnalyze, onExploreGraph, onSelectEmail }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) => {
   const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
-  const [totalEmails, setTotalEmails] = useState<number>(0);
   const [campaigns, setCampaigns] = useState<CampaignListItemResponse[]>([]);
   const [totalReports, setTotalReports] = useState<number>(0);
+  const [totalUsers, setTotalUsers] = useState<number>(0);
+  const [totalOrganizations, setTotalOrganizations] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,16 +64,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onAnalyze, onExplo
       setLoading(true);
       setError(null);
       try {
-        const [emailPage, campaignList, reportPage] = await Promise.all([
+        const [emailPage, campaignList, reportPage, userList, orgList] = await Promise.all([
           listEmails(0, 100),
-          listCampaigns(undefined, 0, 5),
+          listCampaigns(undefined, 0, 50).catch(() => []),
           listReports(undefined, undefined, 1),
+          listPlatformUsers().catch(() => []),
+          listPlatformOrganizations().catch(() => []),
         ]);
         if (cancelled) return;
         setEmails(emailPage.items);
-        setTotalEmails(emailPage.total);
         setCampaigns(campaignList);
         setTotalReports(reportPage.total_reports);
+        setTotalUsers(userList.length);
+        setTotalOrganizations(orgList.length);
       } catch (err) {
         if (!cancelled) setError('Could not load dashboard data from the backend.');
       } finally {
@@ -79,69 +88,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onAnalyze, onExplo
     };
   }, []);
 
-  const threatCount = emails.filter((e) => THREAT_STATUSES.has(e.qualification_status)).length;
-  const criticalCount = emails.filter((e) => e.qualification_status === 'MALICIOUS').length;
-  const recent = emails.slice(0, 8);
+  // Filter out safe / normal emails — strictly threat & phishing emails only
+  const phishingEmails = emails.filter(
+    (e) => !SAFE_STATUSES.has((e.qualification_status || '').toUpperCase())
+  );
+  const totalPhishing = phishingEmails.length;
+  const threatCount = phishingEmails.filter((e) => THREAT_STATUSES.has(e.qualification_status)).length;
+  const recent = phishingEmails.slice(0, 8);
 
-  const distribution = ['MALICIOUS', 'HIGH_RISK', 'SUSPICIOUS', 'CAMPAIGN_RELATED', 'QUALIFIED_FOR_INVESTIGATION', 'NORMAL']
+  // Distribution strictly excludes normal/safe emails
+  const distribution = ['MALICIOUS', 'HIGH_RISK', 'SUSPICIOUS', 'CAMPAIGN_RELATED', 'QUALIFIED_FOR_INVESTIGATION']
     .map((status) => ({
       status,
-      count: emails.filter((e) => e.qualification_status === status).length,
+      count: phishingEmails.filter((e) => e.qualification_status === status).length,
     }))
     .filter((d) => d.count > 0);
   const maxCount = Math.max(1, ...distribution.map((d) => d.count));
 
   return (
     <div className="space-y-6">
-      {/* Hero */}
-      <div className="rounded-2xl bg-navy-sidebar text-white p-8 border border-navy-border relative overflow-hidden">
-        <div className="relative z-10 flex flex-col lg:flex-row items-center gap-8">
-          <div className="max-w-2xl">
-            <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide bg-sky-500/15 text-sky-300 border border-sky-400/30">
-              Intelligence Behind Every Inbox
-            </span>
-            <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-white">
-              MailinteL Forensic Intelligence
-            </h1>
-            <p className="mt-3 text-sm text-slate-300 leading-relaxed">
-              Upload a suspicious .eml file to reconstruct its transmission path, verify authentication,
-              enrich infrastructure signals, and correlate it against known campaigns.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                onClick={onAnalyze}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-hover transition-colors"
-              >
-                <UploadCloud className="w-4 h-4" />
-                Analyze Suspicious .eml
-              </button>
-              <button
-                onClick={onExploreGraph}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-navy-elevated text-slate-200 border border-navy-border font-medium text-sm hover:bg-navy-deep hover:text-white transition-colors"
-              >
-                <Network className="w-4 h-4" />
-                Explore Investigation Graph
-              </button>
-            </div>
-          </div>
-          <div className="shrink-0">
-            <BrandLogo variant="hero" surface="dark" showTagline={false} />
-          </div>
-        </div>
-      </div>
-
       {error && (
         <div className="px-4 py-2.5 rounded-lg bg-severity-high-soft border border-severity-high/20 text-sm text-severity-high">
           {error}
         </div>
       )}
 
-      {/* What is happening / how serious / what needs attention — Design.md §12 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* KPI metric cards strip — 6 columns with Reports Generated as the last tab */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
-          { label: 'Emails Analyzed', value: totalEmails, icon: Inbox, color: 'text-brand', bg: 'bg-brand-soft' },
+          { label: 'Total Phishing Mails', value: totalPhishing, icon: Inbox, color: 'text-brand', bg: 'bg-brand-soft' },
           { label: 'Threats Detected', value: threatCount, icon: ShieldAlert, color: 'text-severity-high', bg: 'bg-severity-high-soft' },
-          { label: 'Critical', value: criticalCount, icon: ShieldAlert, color: 'text-severity-critical', bg: 'bg-severity-critical-soft' },
+          { label: 'Total Users', value: totalUsers, icon: Users, color: 'text-purple-600', bg: 'bg-purple-50' },
+          { label: 'Total Organizations', value: totalOrganizations, icon: Building2, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+          { label: 'Campaigns', value: campaigns.length, icon: Flag, color: 'text-amber-600', bg: 'bg-amber-50' },
           { label: 'Reports Generated', value: totalReports, icon: FileText, color: 'text-indigo-600', bg: 'bg-indigo-50' },
         ].map((metric) => {
           const Icon = metric.icon;
@@ -164,13 +143,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onAnalyze, onExplo
         <div className="lg:col-span-2 rounded-xl bg-workspace-card border border-workspace-border shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-workspace-border flex items-center justify-between">
             <h2 className="text-sm font-bold text-text-primary">Recent Activity</h2>
-            <span className="text-xs text-text-muted">{totalEmails} total</span>
+            <span className="text-xs text-text-muted">{totalPhishing} total</span>
           </div>
           {loading ? (
             <div className="p-8 text-center text-sm text-text-muted">Loading…</div>
           ) : recent.length === 0 ? (
             <div className="p-8 text-center text-sm text-text-muted">
-              No emails analyzed yet. Upload a .eml file to get started.
+              No phishing or threat emails detected.
             </div>
           ) : (
             <table className="w-full text-sm">

@@ -148,3 +148,9 @@ watchfiles==1.2.0
     # via uvicorn
 websockets==17.1
     # via uvicorn
+reportlab==5.0.1
+    # via -r requirements.in
+pillow==12.3.0
+    # via -r requirements.in
+pymupdf==1.28.2
+    # via -r requirements.in

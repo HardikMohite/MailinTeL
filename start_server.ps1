@@ -17,7 +17,8 @@ param (
     [switch]$SkipMigrations,
     [string]$HostName = "127.0.0.1",
     [int]$Port = 8000,
-    [switch]$NoReload
+    [switch]$NoReload,
+    [switch]$OpenBrowser
 )
 
 $ErrorActionPreference = "Stop"
@@ -200,6 +201,11 @@ if ($WithFrontend -and (Test-Path $FrontendDir)) {
     Write-Host ""
     Write-Host "[+] Launching Vite Frontend in a concurrent window..." -ForegroundColor Magenta
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$FrontendDir'; Write-Host 'MailinteL Frontend Starting on http://localhost:5173...' -ForegroundColor Cyan; npm run dev"
+
+    if ($OpenBrowser) {
+        Write-Host "[+] Opening MailinTeL in your default web browser (http://localhost:5173)..." -ForegroundColor Cyan
+        Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 3; Start-Process 'http://localhost:5173'"
+    }
 }
 
 # 7. Launch FastAPI Server with Uvicorn

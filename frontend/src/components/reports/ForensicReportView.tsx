@@ -238,13 +238,33 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
     }
   };
 
-  const handleDownload = async (format: 'html' | 'markdown' | 'json') => {
+  const handleDownload = async (format: 'html' | 'markdown' | 'json' | 'pdf') => {
     if (!reportData) return;
-    let content = '';
-    let mimeType = 'text/plain';
-    const filename = `MailIntel_Forensic_Report_${(selectedEmailId || selectedCampaignId).slice(0, 8)}.${
+    const emailOrCampId = (selectedEmailId || selectedCampaignId).slice(0, 8);
+    const filename = `MailIntel_Forensic_Report_${emailOrCampId}.${
       format === 'markdown' ? 'md' : format
     }`;
+
+    if (format === 'pdf' && selectedEmailId) {
+      try {
+        const blobData = await exportEmailReport(selectedEmailId, 'pdf');
+        const blob = blobData instanceof Blob ? blobData : new Blob([blobData as any], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err: any) {
+        setError(`Failed to download PDF: ${err?.message || 'Server error'}`);
+      }
+      return;
+    }
+
+    let content = '';
+    let mimeType = 'text/plain';
 
     if (format === 'html') {
       if (rawHtml) {
@@ -490,6 +510,13 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
               </button>
               {reportData && (
                 <div className="absolute right-0 mt-1 w-48 bg-workspace-card border border-workspace-border rounded-lg shadow-xl p-1 hidden group-hover:block z-30">
+                  <button
+                    onClick={() => handleDownload('pdf')}
+                    className="w-full text-left px-3 py-2 text-xs text-brand font-medium hover:text-brand hover:bg-workspace-secondary rounded flex items-center justify-between transition-colors"
+                  >
+                    <span>Download PDF Dossier</span>
+                    <span className="text-[10px] bg-brand/10 text-brand px-1.5 py-0.5 rounded">2-Page</span>
+                  </button>
                   <button
                     onClick={() => handleDownload('html')}
                     className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-workspace-secondary rounded transition-colors"
