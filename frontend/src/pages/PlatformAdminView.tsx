@@ -20,7 +20,9 @@ import {
   Eye,
   Inbox,
   Flame,
+  LayoutDashboard,
 } from 'lucide-react';
+import { DashboardView } from '../components/dashboard/DashboardView';
 import {
   listPlatformOrganizations,
   createPlatformOrganization,
@@ -56,18 +58,22 @@ const AUDIT_PAGE_SIZE = 50;
 export interface PlatformAdminViewProps {
   onSelectEmail?: (emailId: string) => void;
   onOpenReport?: (emailId: string) => void;
+  onAnalyze?: () => void;
+  onExploreGraph?: () => void;
 }
 
 export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
   onSelectEmail,
   onOpenReport,
+  onAnalyze,
+  onExploreGraph,
 }) => {
   const { user, isCrossOrg } = useAuth();
   const parseApiError = useApiErrorHandler();
   const canAccess = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
 
   // Navigation sub-tabs
-  const [activeSection, setActiveSection] = useState<'phishing' | 'organizations' | 'users' | 'audit'>('phishing');
+  const [activeSection, setActiveSection] = useState<'overview' | 'phishing' | 'organizations' | 'users' | 'audit'>('overview');
 
   // --- Phishing Email Ingestion & Triage Queue ----------------------
   const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
@@ -370,6 +376,17 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
         {/* Navigation Switcher Pills */}
         <div className="flex items-center gap-1 bg-workspace p-1 rounded-xl border border-workspace-border text-xs font-medium">
           <button
+            onClick={() => setActiveSection('overview')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+              activeSection === 'overview'
+                ? 'bg-workspace-card text-brand font-semibold shadow-xs'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            <LayoutDashboard className="w-3.5 h-3.5" />
+            <span>System Overview</span>
+          </button>
+          <button
             onClick={() => setActiveSection('phishing')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
               activeSection === 'phishing'
@@ -378,7 +395,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             }`}
           >
             <Mail className="w-3.5 h-3.5" />
-            <span>All Phishing Emails ({emails.length})</span>
+            <span>Phishing Triage ({emails.length})</span>
           </button>
           <button
             onClick={() => setActiveSection('organizations')}
@@ -400,7 +417,7 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Users across organizations</span>
+            <span>Users & Access</span>
           </button>
           <button
             onClick={() => setActiveSection('audit')}
@@ -415,6 +432,15 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* SECTION 0: SYSTEM OVERVIEW & TELEMETRY */}
+      {activeSection === 'overview' && (
+        <DashboardView
+          onAnalyze={onAnalyze || (() => {})}
+          onExploreGraph={onExploreGraph || (() => {})}
+          onSelectEmail={onSelectEmail || (() => {})}
+        />
+      )}
 
       {/* SECTION 1: ALL PHISHING EMAILS & TRIAGE QUEUE */}
       {activeSection === 'phishing' && (

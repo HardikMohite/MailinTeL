@@ -37,14 +37,16 @@ def get_engine_connect_args() -> Dict[str, Any]:
 
 from sqlalchemy.pool import NullPool
 
-# Determine engine pooling options: keep warm pooled connections alive
+# Determine engine pooling options
 _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,
     "future": True,
 }
 
-if settings.is_pooler_connection:
+# Supabase Supavisor pooler manages pooling externally. Keeping an internal connection
+# pool in SQLAlchemy causes WinError 10054 / ConnectionResetError when Supavisor closes idle sockets.
+if settings.is_pooler_connection or settings.is_supabase_db:
     _engine_kwargs["poolclass"] = NullPool
 else:
     _engine_kwargs.update({
@@ -52,7 +54,7 @@ else:
         "pool_size": 10,
         "max_overflow": 20,
         "pool_timeout": 30,
-        "pool_recycle": 300,
+        "pool_recycle": 180,
     })
 
 # Create Async Engine for PostgreSQL

@@ -11,7 +11,6 @@ import {
   FileText,
   Settings,
   Users,
-  ShieldCheck,
   ExternalLink,
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
@@ -70,14 +69,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
         {
           title: 'Admin Command',
           items: [
-            { id: 'dashboard', label: 'System Dashboard', icon: LayoutDashboard },
+            { id: 'dashboard', label: 'Admin Dashboard', icon: LayoutDashboard },
           ],
         },
         {
           title: 'Investigation Operations',
           items: [
-            { id: 'analyze', label: 'Email Investigation', icon: UploadCloud },
             { id: 'history', label: 'Analysis History', icon: History },
+            { id: 'campaigns', label: 'Campaign', icon: Flag },
             { id: 'evidence', label: 'Evidence Vault', icon: FolderLock },
             { id: 'reports', label: 'Forensic Reports', icon: FileText },
           ],
@@ -86,7 +85,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
           title: 'Threat Intelligence',
           items: [
             { id: 'intelligence', label: 'IOC Threat Intel', icon: ShieldAlert },
-            { id: 'campaigns', label: 'Campaign Clusters', icon: Flag },
             { id: 'graph' as const, label: 'Investigation Graph', icon: Network },
             { id: 'geo', label: 'Geo Transmission Map', icon: Globe },
           ],
@@ -94,7 +92,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
         {
           title: 'Governance & Access',
           items: [
-            { id: 'platform-admin' as const, label: 'Platform Admin', icon: ShieldCheck, badge: 'Lead' },
             ...(canManageTeam ? [{ id: 'team' as const, label: 'Team & Access', icon: Users }] : []),
             { id: 'settings', label: 'Settings', icon: Settings, badge: 'Planned' },
           ],

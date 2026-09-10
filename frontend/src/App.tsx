@@ -13,6 +13,7 @@ import { ForensicReportView } from './components/reports/ForensicReportView';
 import { SettingsView } from './components/settings/SettingsView';
 import { TeamView } from './components/settings/TeamView';
 import { PlatformAdminView } from './pages/PlatformAdminView';
+import { useAuth } from './context/AuthContext';
 import { checkHealth, checkDetailedHealth, HealthResponse, DetailedHealthResponse } from './services/api';
 import { apiEvents } from './services/apiEvents';
 import {
@@ -22,6 +23,8 @@ import {
 } from './components/errors';
 
 export const App: React.FC = () => {
+  const { user, isCrossOrg } = useAuth();
+  const isPlatformAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [detailedHealth, setDetailedHealth] = useState<DetailedHealthResponse | null>(null);
@@ -128,11 +131,20 @@ export const App: React.FC = () => {
           <>
           {/* Tab Content Views */}
           {activeTab === 'dashboard' && (
-            <DashboardView
-              onAnalyze={() => setActiveTab('analyze')}
-              onExploreGraph={() => setActiveTab('graph')}
-              onSelectEmail={handleInspectEmailInWorkspace}
-            />
+            isPlatformAdmin ? (
+              <PlatformAdminView
+                onSelectEmail={handleInspectEmailInWorkspace}
+                onOpenReport={handleOpenReportForEmail}
+                onAnalyze={() => setActiveTab('analyze')}
+                onExploreGraph={() => setActiveTab('graph')}
+              />
+            ) : (
+              <DashboardView
+                onAnalyze={() => setActiveTab('analyze')}
+                onExploreGraph={() => setActiveTab('graph')}
+                onSelectEmail={handleInspectEmailInWorkspace}
+              />
+            )
           )}
           {/* Analyze Email Tab / Investigation Workspace */}
           {activeTab === 'analyze' && (
