@@ -26,6 +26,7 @@ MVP scope / deliberate limitations (documented, not silently swallowed):
 """
 import uuid
 import logging
+import asyncio
 import secrets
 import string
 from datetime import datetime, timezone
@@ -38,7 +39,8 @@ from sqlalchemy import select, func
 
 from app.db.session import get_db
 from app.core.security import hash_password
-from app.api.deps import get_current_user, require_roles, CurrentUser, ADMIN_ROLES, ANALYST_ROLES
+from app.core.redis import redis_manager
+from app.api.deps import get_current_user, require_roles, CurrentUser, ADMIN_ROLES, ANALYST_ROLES, invalidate_user_auth
 from app.models.identity import User, Organization, OrganizationMember, Role
 
 logger = logging.getLogger("mailintel.users")
@@ -194,10 +196,20 @@ async def list_members(
     org_key = str(current_user.organization_id)
     now = time.time()
     is_mock = hasattr(db, "_mock_return_value") or hasattr(db, "mock_calls") or hasattr(db, "assert_called")
-    if not is_mock and org_key in _MEMBERS_CACHE:
-        ts, cached_members = _MEMBERS_CACHE[org_key]
-        if now - ts < _MEMBERS_CACHE_TTL:
-            return cached_members
+    if not is_mock:
+        if org_key in _MEMBERS_CACHE:
+            ts, cached_members = _MEMBERS_CACHE[org_key]
+            if now - ts < _MEMBERS_CACHE_TTL:
+                return cached_members
+
+        try:
+            r_data = await redis_manager.get_json(f"cache:members:list:{org_key}")
+            if r_data and isinstance(r_data, list):
+                cached = [OrgMemberPublic(**m) for m in r_data]
+                _MEMBERS_CACHE[org_key] = (now, cached)
+                return cached
+        except Exception:
+            pass
 
     stmt = (
         select(OrganizationMember, User, Role)
@@ -210,6 +222,16 @@ async def list_members(
     members = [_to_public(user, role, membership) for membership, user, role in result.all()]
     if not is_mock:
         _MEMBERS_CACHE[org_key] = (now, members)
+        try:
+            asyncio.create_task(
+                redis_manager.set_json(
+                    f"cache:members:list:{org_key}",
+                    [m.model_dump() for m in members],
+                    expire_seconds=60,
+                )
+            )
+        except Exception:
+            pass
     return members
 
 
@@ -283,6 +305,11 @@ async def invite_user(
     db.add(membership)
 
     await db.commit()
+    _MEMBERS_CACHE.pop(str(organization.id), None)
+    try:
+        asyncio.create_task(redis_manager.delete(f"cache:members:list:{organization.id}"))
+    except Exception:
+        pass
     from app.core.audit import record_audit
     await record_audit(db, actor_user_id=current_user.id, organization_id=organization.id, action="CREATE", resource_type="USER", resource_id=user.id)
 
@@ -345,6 +372,12 @@ async def update_member_role(
     new_role = await _get_or_create_role(db, payload.role_code)
     membership.role_id = new_role.id
     await db.commit()
+    invalidate_user_auth(user_id)
+    _MEMBERS_CACHE.pop(str(current_user.organization_id), None)
+    try:
+        asyncio.create_task(redis_manager.delete(f"cache:members:list:{current_user.organization_id}"))
+    except Exception:
+        pass
     from app.core.audit import record_audit
     await record_audit(db, actor_user_id=current_user.id, organization_id=current_user.organization_id, action="UPDATE", resource_type="USER", resource_id=user.id, metadata_json={"role": new_role.code})
 
@@ -403,6 +436,12 @@ async def deactivate_member(
 
     membership.status = "INACTIVE"
     await db.commit()
+    invalidate_user_auth(user_id)
+    _MEMBERS_CACHE.pop(str(current_user.organization_id), None)
+    try:
+        asyncio.create_task(redis_manager.delete(f"cache:members:list:{current_user.organization_id}"))
+    except Exception:
+        pass
     from app.core.audit import record_audit
     await record_audit(db, actor_user_id=current_user.id, organization_id=current_user.organization_id, action="DELETE", resource_type="USER", resource_id=user_id)
 

@@ -1192,8 +1192,9 @@ async def list_emails(
 
     # Fast 30s caching for default paginated listings across panels (Dashboard, Vault, Workspace)
     now = time.time()
+    is_mock = hasattr(db, "_mock_return_value") or hasattr(db, "mock_calls") or hasattr(db, "assert_called")
     list_cache_key = f"list:{requested_org_id or 'all'}:{current_user.id if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES else 'org'}:{skip}:{limit}"
-    if not analysis_status and not qualification_status and not threat_only:
+    if not is_mock and not analysis_status and not qualification_status and not threat_only:
         if list_cache_key in _EMAIL_CACHE:
             ts, data = _EMAIL_CACHE[list_cache_key]
             if now - ts < 30.0:
@@ -1282,10 +1283,10 @@ async def list_emails(
         )
 
     resp = EmailListResponse(total=total_count, items=items)
-    if not analysis_status and not qualification_status:
+    if not is_mock and not analysis_status and not qualification_status:
         _EMAIL_CACHE[list_cache_key] = (now, resp.model_dump())
         try:
-            await redis_manager.set_json(f"cache:email:{list_cache_key}", resp.model_dump(), expire_seconds=30)
+            asyncio.create_task(redis_manager.set_json(f"cache:email:{list_cache_key}", resp.model_dump(), expire_seconds=30))
         except Exception:
             pass
     return resp

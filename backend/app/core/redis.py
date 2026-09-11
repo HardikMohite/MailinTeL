@@ -44,9 +44,11 @@ class RedisManager:
             self._client = aioredis.from_url(
                 url,
                 decode_responses=True,
-                socket_timeout=5.0,
-                socket_connect_timeout=5.0,
+                socket_timeout=3.0,
+                socket_connect_timeout=3.0,
                 retry_on_timeout=True,
+                health_check_interval=30,
+                max_connections=30,
             )
         return self._client
 
@@ -115,34 +117,50 @@ class RedisManager:
     ) -> bool:
         """
         Serializes data to JSON and stores it in Redis with optional TTL.
+        Fails silently and returns False if Redis is unreachable.
         """
-        payload = json.dumps(value)
-        if expire_seconds:
-            await self.client.set(key, payload, ex=expire_seconds)
-        else:
-            await self.client.set(key, payload)
-        return True
+        try:
+            payload = json.dumps(value, default=str)
+            if expire_seconds:
+                await self.client.set(key, payload, ex=expire_seconds)
+            else:
+                await self.client.set(key, payload)
+            return True
+        except Exception as exc:
+            logger.debug("Redis set_json suppressed error for %s: %s", key, exc)
+            return False
 
     async def get_json(self, key: str) -> Optional[Any]:
         """
         Retrieves JSON payload from Redis and deserializes it.
+        Fails safely and returns None if Redis is unreachable or key is absent.
         """
-        data = await self.client.get(key)
-        if data is None:
+        try:
+            data = await self.client.get(key)
+            if data is None:
+                return None
+            return json.loads(data)
+        except Exception as exc:
+            logger.debug("Redis get_json suppressed error for %s: %s", key, exc)
             return None
-        return json.loads(data)
 
     async def delete(self, key: str) -> int:
         """
         Deletes a key from Redis.
         """
-        return await self.client.delete(key)
+        try:
+            return await self.client.delete(key)
+        except Exception:
+            return 0
 
     async def exists(self, key: str) -> bool:
         """
         Checks if a key exists in Redis.
         """
-        return bool(await self.client.exists(key))
+        try:
+            return bool(await self.client.exists(key))
+        except Exception:
+            return False
 
     async def close(self) -> None:
         """
