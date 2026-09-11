@@ -1,7 +1,7 @@
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 from fastapi import (
     APIRouter,
@@ -40,6 +40,10 @@ from app.core.redis import redis_manager
 logger = logging.getLogger("mailintel.api.reports")
 
 router = APIRouter()
+
+import time
+_REPORTS_CACHE: Dict[str, Tuple[float, Any]] = {}
+_REPORTS_CACHE_TTL = 30.0
 
 
 class ReportItemResponse(BaseModel):
@@ -310,12 +314,25 @@ async def list_reports(
     result set must resolve to the caller's org (or have no resolvable
     owner at all, which is excluded rather than shown to everyone).
     """
+    # Normalize default Query objects if called outside FastAPI dependency resolution
+    email_id = None if hasattr(email_id, "default") else email_id
+    campaign_id = None if hasattr(campaign_id, "default") else campaign_id
+    organization_id = None if hasattr(organization_id, "default") else organization_id
+    limit = 50 if hasattr(limit, "default") else limit
+
     if email_id is not None:
         await get_authorized_email(email_id, current_user, db)
     if campaign_id is not None:
         await get_authorized_campaign(campaign_id, current_user, db)
 
     requested_org_id = organization_id if current_user.role_code in CROSS_ORG_ROLES else current_user.organization_id
+    cache_key = f"reports:list:{requested_org_id}:{email_id}:{campaign_id}:{limit}"
+    now = time.time()
+    if cache_key in _REPORTS_CACHE:
+        ts, cached_res = _REPORTS_CACHE[cache_key]
+        if now - ts < _REPORTS_CACHE_TTL:
+            return cached_res
+
     org_owned_emails = (
         select(Email.id)
         .join(EmailSource, EmailSource.id == Email.source_id)
@@ -342,7 +359,7 @@ async def list_reports(
     res = await db.execute(stmt)
     reports_objs = res.scalars().all()
 
-    return ReportListResponse(
+    resp = ReportListResponse(
         total_reports=len(reports_objs),
         reports=[
             ReportItemResponse(
@@ -358,6 +375,8 @@ async def list_reports(
             for r in reports_objs
         ],
     )
+    _REPORTS_CACHE[cache_key] = (now, resp)
+    return resp
 
 
 @router.get(

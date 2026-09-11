@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Auth / JWT Settings
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     JWT_ALGORITHM: str = "HS256"
-    BCRYPT_ROUNDS: int = 12
+    BCRYPT_ROUNDS: int = 10
     # SECURE DEFAULT (MVP-06): closed unless explicitly opted into via .env — public
     # self-signup immediately grants a new organization admin, so it must be a
     # deliberate choice (e.g. a disposable demo), not something left on by omission.

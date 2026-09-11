@@ -1,4 +1,5 @@
 import uuid
+import time
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Set, Tuple
@@ -23,6 +24,10 @@ _BUNDLE_CACHE_TTL_SECONDS: float = 1800.0  # 30 minutes
 # Cache for campaign details
 _CAMPAIGN_DETAILS_CACHE: Dict[uuid.UUID, Tuple[float, Dict[str, Any]]] = {}
 _CAMPAIGN_CACHE_TTL: float = 1800.0
+
+# Cache for campaign listings (30 seconds)
+_CAMPAIGN_LIST_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+_CAMPAIGN_LIST_CACHE_TTL: float = 30.0
 
 
 class CampaignCorrelationService:
@@ -375,9 +380,10 @@ class CampaignCorrelationService:
 
     @staticmethod
     async def invalidate_campaign_cache(campaign_id: uuid.UUID) -> None:
-        """Invalidates campaign detail caches upon modification."""
+        """Invalidates campaign detail and listing caches upon modification."""
         try:
             _CAMPAIGN_DETAILS_CACHE.pop(campaign_id, None)
+            _CAMPAIGN_LIST_CACHE.clear()
             await redis_manager.delete(f"cache:campaign:details:{campaign_id}")
         except Exception as e:
             logger.warning(f"Campaign cache invalidation notice: {e}")
@@ -503,9 +509,29 @@ class CampaignCorrelationService:
         app.api.deps.ADMIN_ROLES / ANALYST_ROLES vs plain USER callers in
         the campaigns router.
         """
+        cache_key = f"campaigns:list:{organization_id}:{status_filter}:{owner_user_id}:{skip}:{limit}"
+        now = time.time()
+        if cache_key in _CAMPAIGN_LIST_CACHE:
+            ts, cached_data = _CAMPAIGN_LIST_CACHE[cache_key]
+            if now - ts < _CAMPAIGN_LIST_CACHE_TTL:
+                return cached_data
+
         from app.models.emails import Email, EmailSource  # local import avoids a cycle
 
-        query = select(Campaign)
+        # Aggregate member counts via subquery to eliminate N+1 sequential database queries
+        counts_sub = (
+            select(
+                CampaignMembership.campaign_id,
+                func.count(CampaignMembership.id).label("member_count"),
+            )
+            .group_by(CampaignMembership.campaign_id)
+            .subquery()
+        )
+
+        query = (
+            select(Campaign, func.coalesce(counts_sub.c.member_count, 0).label("member_count"))
+            .outerjoin(counts_sub, Campaign.id == counts_sub.c.campaign_id)
+        )
         if organization_id is not None:
             query = query.where(Campaign.organization_id == organization_id)
         if status_filter:
@@ -522,16 +548,12 @@ class CampaignCorrelationService:
         query = query.order_by(Campaign.last_activity_at.desc()).offset(skip).limit(limit)
 
         result = await session.execute(query)
-        campaigns = result.scalars().all()
+        rows = result.all()
 
         output: List[Dict[str, Any]] = []
-        for c in campaigns:
-            # Count members
-            cnt_res = await session.execute(
-                select(func.count(CampaignMembership.id)).where(CampaignMembership.campaign_id == c.id)
-            )
-            member_count = cnt_res.scalar() or 0
-
+        for row in rows:
+            c = row[0]
+            member_count = int(row[1] or 0)
             output.append({
                 "id": str(c.id),
                 "campaign_name": c.campaign_name,
@@ -542,6 +564,8 @@ class CampaignCorrelationService:
                 "last_activity_at": c.last_activity_at.isoformat() if c.last_activity_at else None,
                 "member_count": member_count,
             })
+
+        _CAMPAIGN_LIST_CACHE[cache_key] = (now, output)
         return output
 
     async def get_email_campaign_memberships(

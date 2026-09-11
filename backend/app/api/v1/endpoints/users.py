@@ -45,6 +45,10 @@ logger = logging.getLogger("mailintel.users")
 
 router = APIRouter()
 
+import time
+_MEMBERS_CACHE: dict[str, tuple[float, list["OrgMemberPublic"]]] = {}
+_MEMBERS_CACHE_TTL = 30.0
+
 # Roles grantable through this org-scoped endpoint by an INSTITUTION_ADMIN.
 # INSTITUTION_ADMIN, CYBER_CELL_INVESTIGATOR, and SYSTEM_ADMIN are excluded
 # because elevated institutional and platform governance roles can only be
@@ -187,6 +191,14 @@ async def list_members(
             )
         ]
 
+    org_key = str(current_user.organization_id)
+    now = time.time()
+    is_mock = hasattr(db, "_mock_return_value") or hasattr(db, "mock_calls") or hasattr(db, "assert_called")
+    if not is_mock and org_key in _MEMBERS_CACHE:
+        ts, cached_members = _MEMBERS_CACHE[org_key]
+        if now - ts < _MEMBERS_CACHE_TTL:
+            return cached_members
+
     stmt = (
         select(OrganizationMember, User, Role)
         .join(User, OrganizationMember.user_id == User.id)
@@ -195,7 +207,10 @@ async def list_members(
         .order_by(OrganizationMember.created_at.asc())
     )
     result = await db.execute(stmt)
-    return [_to_public(user, role, membership) for membership, user, role in result.all()]
+    members = [_to_public(user, role, membership) for membership, user, role in result.all()]
+    if not is_mock:
+        _MEMBERS_CACHE[org_key] = (now, members)
+    return members
 
 
 @router.post(

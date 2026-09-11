@@ -41,25 +41,18 @@ def get_engine_connect_args() -> Dict[str, Any]:
     return args
 
 
-# Determine engine pooling options: keep warm pooled connections alive, or use NullPool for transaction poolers
+# Configure high-performance async connection pooling.
+# Keeps warm pooled connections alive while recycling them before cloud proxy idle timeouts.
 _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,
     "future": True,
+    "pool_size": 15,
+    "max_overflow": 25,
+    "pool_timeout": 30,
+    "pool_recycle": 120,  # Recycle before Supavisor / PgBouncer drops idle sockets
+    "pool_pre_ping": False,  # Avoids 400ms pre-ping overhead on every query
 }
-
-# Supabase Supavisor pooler manages pooling externally. Keeping an internal connection
-# pool in SQLAlchemy causes WinError 10054 / ConnectionResetError when Supavisor closes idle sockets.
-if settings.is_pooler_connection or settings.is_supabase_db:
-    _engine_kwargs["poolclass"] = NullPool
-else:
-    _engine_kwargs.update({
-        "pool_pre_ping": True,
-        "pool_size": 10,
-        "max_overflow": 20,
-        "pool_timeout": 30,
-        "pool_recycle": 180,
-    })
 
 # Create Async Engine for PostgreSQL
 engine: AsyncEngine = create_async_engine(
@@ -80,11 +73,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI dependency that yields an async database session
     and guarantees proper session closure and rollback on exception.
+    Only commits if changes exist, saving an entire network round-trip for reads.
     """
     async with async_session_maker() as session:
         try:
             yield session
-            await session.commit()
+            if session.is_active and (session.dirty or session.new or session.deleted):
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

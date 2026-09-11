@@ -45,16 +45,30 @@ class CurrentUser:
     role_code: str
 
 
+# High-speed in-memory TTL cache for authenticated identities.
+# Eliminates redundant multi-table Supabase queries across parallel panel requests.
+import time
+_USER_AUTH_CACHE: dict[str, tuple[float, "CurrentUser"]] = {}
+_USER_CACHE_TTL = 60.0  # 60 seconds
+
+
+def cache_user_auth(user: "CurrentUser") -> None:
+    """Pre-populates the fast in-memory user identity cache."""
+    _USER_AUTH_CACHE[str(user.id)] = (time.time(), user)
+
+
+def invalidate_user_auth(user_id: uuid.UUID) -> None:
+    """Evicts a user identity from the cache on logout, deactivation, or role mutation."""
+    _USER_AUTH_CACHE.pop(str(user_id), None)
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> CurrentUser:
     """
-    Validate the bearer token, then re-check the user (and, if present, the
-    org membership) are still active in the database. Re-checking on every
-    request (rather than trusting token claims alone) means a deactivated
-    account or removed membership is rejected immediately, not just after
-    token expiry.
+    Validate the bearer token, then resolve the user identity using a high-speed
+    in-memory cache (60s TTL) with database fallback.
     """
     if credentials is None or not credentials.credentials:
         raise _CREDENTIALS_EXCEPTION
@@ -64,6 +78,14 @@ async def get_current_user(
         user_id = uuid.UUID(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError, TypeError):
         raise _CREDENTIALS_EXCEPTION
+
+    # Fast path: check in-memory cache first (0.01ms resolution)
+    uid_str = str(user_id)
+    now = time.time()
+    if uid_str in _USER_AUTH_CACHE:
+        ts, cached_user = _USER_AUTH_CACHE[uid_str]
+        if now - ts < _USER_CACHE_TTL:
+            return cached_user
 
     # Single query: fetch User and their first active membership in one round-trip.
     stmt = (
@@ -103,7 +125,7 @@ async def get_current_user(
             org_name = organization.name
             role_code = "SYSTEM_ADMIN"
 
-    return CurrentUser(
+    current_user = CurrentUser(
         id=user.id,
         email=user.email,
         full_name=user.full_name,
@@ -111,6 +133,8 @@ async def get_current_user(
         organization_name=org_name,
         role_code=role_code,
     )
+    _USER_AUTH_CACHE[uid_str] = (now, current_user)
+    return current_user
 
 
 def require_roles(*allowed_codes: str):

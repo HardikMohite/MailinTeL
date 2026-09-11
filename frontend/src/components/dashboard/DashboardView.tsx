@@ -69,9 +69,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
       setError(null);
       try {
         const [emailPage, campaignList, reportPage, userCount, orgCount] = await Promise.all([
-          listEmails(0, 100),
+          listEmails(0, 100).catch((err) => {
+            console.warn('Failed to fetch emails for dashboard:', err);
+            return { total: 0, items: [] };
+          }),
           listCampaigns(undefined, 0, 50).catch(() => []),
-          listReports(undefined, undefined, 1),
+          listReports(undefined, undefined, 1).catch(() => ({ total_reports: 0, reports: [] })),
           (isSysAdmin ? listPlatformUsers() : listOrgMembers())
             .then((res) => (Array.isArray(res) ? res.length : 1))
             .catch(() => 1),

@@ -18,7 +18,7 @@ from app.core.security import (
 )
 from app.core.rate_limit import rate_limiter
 from app.core.redis import redis_manager
-from app.api.deps import get_current_user, CurrentUser
+from app.api.deps import get_current_user, CurrentUser, cache_user_auth
 from app.models.identity import User, Organization, OrganizationMember, Role
 
 logger = logging.getLogger("mailintel.auth")
@@ -237,15 +237,30 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
 
+    import asyncio
     from app.core.audit import record_audit
-    await record_audit(
-        db,
-        actor_user_id=user.id,
-        organization_id=org_id,
-        action="LOGIN",
-        resource_type="AUTH",
-        resource_id=user.id,
-        metadata_json={"email": user.email, "role": role_code},
+    asyncio.create_task(
+        record_audit(
+            db,
+            actor_user_id=user.id,
+            organization_id=org_id,
+            action="LOGIN",
+            resource_type="AUTH",
+            resource_id=user.id,
+            metadata_json={"email": user.email, "role": role_code},
+        )
+    )
+
+    # Pre-populate in-memory identity cache so immediate subsequent calls are 0ms
+    cache_user_auth(
+        CurrentUser(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            organization_id=org_id,
+            organization_name=org_name,
+            role_code=role_code,
+        )
     )
 
     token = create_access_token(user_id=user.id, organization_id=org_id, role_code=role_code)

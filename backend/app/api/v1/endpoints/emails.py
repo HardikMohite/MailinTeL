@@ -1180,9 +1180,18 @@ async def list_emails(
     from sqlalchemy import func, or_
     from app.models.identity import Organization
 
+    # Normalize default Query objects if called outside FastAPI dependency resolution
+    analysis_status = None if hasattr(analysis_status, "default") else analysis_status
+    qualification_status = None if hasattr(qualification_status, "default") else qualification_status
+    organization_id = None if hasattr(organization_id, "default") else organization_id
+    threat_only = False if hasattr(threat_only, "default") else threat_only
+    skip = 0 if hasattr(skip, "default") else skip
+    limit = 50 if hasattr(limit, "default") else limit
+
     requested_org_id = organization_id if current_user.role_code in CROSS_ORG_ROLES else current_user.organization_id
 
     # Fast 30s caching for default paginated listings across panels (Dashboard, Vault, Workspace)
+    now = time.time()
     list_cache_key = f"list:{requested_org_id or 'all'}:{current_user.id if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES else 'org'}:{skip}:{limit}"
     if not analysis_status and not qualification_status and not threat_only:
         if list_cache_key in _EMAIL_CACHE:
