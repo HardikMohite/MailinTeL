@@ -1,0 +1,9 @@
+{
+  "name": "mailintel",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "install": "npm --prefix frontend install",
+    "build": "npm --prefix frontend run build"
+  }
+}

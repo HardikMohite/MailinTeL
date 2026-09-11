@@ -1,0 +1,7 @@
+backend/
+data/
+.pytest_cache/
+*.pyc
+*.eml
+*.msg
+*.log
