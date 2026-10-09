@@ -23,6 +23,8 @@ import {
   Square,
   Mail,
   Star,
+  Trash2,
+  AlertOctagon,
 } from 'lucide-react';
 import { StatusBadge, SeverityLevel } from '../common/StatusBadge';
 import {
@@ -37,6 +39,8 @@ import {
   exportBatchPdfReport,
   verifyEmailIntegrity,
   verifyReportIntegrity,
+  deleteEmail,
+  batchDeleteEmails,
   ReportIntegrityVerification,
   EmailDetailResponse,
   CampaignListItemResponse,
@@ -112,6 +116,56 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
   const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
   const [reportFilter, setReportFilter] = useState<'ALL' | 'MALICIOUS' | 'SUSPICIOUS' | 'SAFE'>('ALL');
   const [reportSearch, setReportSearch] = useState<string>('');
+
+  // Deletion Modal State
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+    isOpen: boolean;
+    emailIds: string[];
+    title: string;
+  }>({ isOpen: false, emailIds: [], title: '' });
+  const [isDeletingReportEmail, setIsDeletingReportEmail] = useState<boolean>(false);
+  const [deleteReportError, setDeleteReportError] = useState<string | null>(null);
+
+  const executeDeleteReportEmails = async () => {
+    if (!deleteConfirmModal.emailIds.length) return;
+    setIsDeletingReportEmail(true);
+    setDeleteReportError(null);
+    try {
+      const idsToDelete = deleteConfirmModal.emailIds;
+      if (idsToDelete.length === 1) {
+        await deleteEmail(idsToDelete[0]);
+      } else {
+        await batchDeleteEmails(idsToDelete);
+      }
+      const idSet = new Set(idsToDelete);
+      const remainingEmails = emails.filter((e) => !idSet.has(e.id));
+      setEmails(remainingEmails);
+      setSelectedEmailIds((prev) => {
+        const next = new Set(prev);
+        idsToDelete.forEach((id) => next.delete(id));
+        return next;
+      });
+      if (idSet.has(selectedEmailId)) {
+        if (remainingEmails.length > 0) {
+          setSelectedEmailId(remainingEmails[0].id);
+        } else {
+          setSelectedEmailId('');
+          setReportData(null);
+          setRawHtml('');
+          setRawMarkdown('');
+        }
+      }
+      setSuccessMsg(
+        `Successfully deleted ${idsToDelete.length} email case${idsToDelete.length > 1 ? 's' : ''} and permanently purged all associated forensic reports & data.`
+      );
+      setDeleteConfirmModal({ isOpen: false, emailIds: [], title: '' });
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setDeleteReportError(err?.response?.data?.detail || err?.message || 'Failed to delete email artifact.');
+    } finally {
+      setIsDeletingReportEmail(false);
+    }
+  };
 
   const toggleSelectEmail = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -241,6 +295,9 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
           setLoading(false);
         }
       } catch (err: any) {
+        setReportData(null);
+        setRawHtml('');
+        setRawMarkdown('');
         setError(err.response?.data?.detail || err.message || 'Failed to load report data');
         setLoading(false);
       }
@@ -637,6 +694,21 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
                     <span>Seal Evidence ({selectedEmailIds.size})</span>
                   </button>
                   <button
+                    onClick={() => {
+                      const count = selectedEmailIds.size;
+                      setDeleteConfirmModal({
+                        isOpen: true,
+                        emailIds: Array.from(selectedEmailIds),
+                        title: `Permanently Delete ${count} Selected Email Case${count > 1 ? 's' : ''}?`,
+                      });
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    title="Permanently delete all selected cases and their reports"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Cases ({selectedEmailIds.size})</span>
+                  </button>
+                  <button
                     onClick={() => setSelectedEmailIds(new Set())}
                     className="px-2.5 py-1.5 rounded-lg bg-workspace border border-workspace-border text-text-muted hover:text-text-primary font-medium transition-colors"
                   >
@@ -776,6 +848,20 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
                             title="Download PDF report for this case"
                           >
                             <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmModal({
+                                isOpen: true,
+                                emailIds: [em.id],
+                                title: `Delete Case "${em.subject || em.original_filename || 'Email Artifact'}"?`,
+                              });
+                            }}
+                            className="p-1 rounded hover:bg-rose-100 dark:hover:bg-rose-900/30 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                            title="Permanently delete this email case and all reports/evidence"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
@@ -1779,6 +1865,78 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Permanent Deletion Confirmation Modal */}
+      {deleteConfirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white dark:bg-workspace-card rounded-2xl border border-slate-200 dark:border-workspace-border shadow-2xl p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-slate-900 dark:text-text-primary leading-tight">
+                  {deleteConfirmModal.title}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-text-muted mt-1 leading-relaxed">
+                  This action is permanent and cannot be undone. All forensic data and reports for this email case will be completely deleted:
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-rose-50/70 dark:bg-rose-500/10 border border-rose-200/80 dark:border-rose-500/20 text-[11px] text-rose-900 dark:text-rose-300 space-y-1.5 font-medium">
+              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px] text-rose-700 dark:text-rose-400">
+                <AlertOctagon className="w-3 h-3" /> Cascading Purge Scope:
+              </div>
+              <ul className="list-disc pl-4 space-y-0.5 text-rose-800 dark:text-rose-300/90">
+                <li>Original .EML file & evidence attachments in storage</li>
+                <li>All generated forensic reports & executive dossiers</li>
+                <li>5-strand DNA profiles & correlation link graphs</li>
+                <li>RFC822 transmission headers, relay hops & authentication results</li>
+                <li>Threat scores, findings, sightings & cached telemetry</li>
+              </ul>
+            </div>
+
+            {deleteReportError && (
+              <div className="p-3 rounded-lg bg-red-100 border border-red-300 text-red-800 text-xs font-semibold">
+                {deleteReportError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingReportEmail}
+                onClick={() => {
+                  setDeleteConfirmModal({ isOpen: false, emailIds: [], title: '' });
+                  setDeleteReportError(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-workspace-border text-slate-700 dark:text-text-secondary text-xs font-semibold hover:bg-slate-100 dark:hover:bg-workspace-secondary transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingReportEmail}
+                onClick={executeDeleteReportEmails}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingReportEmail ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Purging Data…</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Permanently Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

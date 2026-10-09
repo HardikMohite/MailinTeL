@@ -162,6 +162,14 @@ class MinioStorageDriver:
             expires=timedelta(seconds=expires_seconds),
         )
 
+    def delete_evidence_object(self, bucket_name: str, object_key: str) -> bool:
+        try:
+            self.client.remove_object(bucket_name=bucket_name, object_name=object_key)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to remove object '%s' from bucket '%s': %s", object_key, bucket_name, exc)
+            return False
+
 
 class SupabaseStorageDriver:
     """
@@ -410,6 +418,15 @@ class SupabaseStorageDriver:
             return f"{base}/storage/v1{signed_url_path}"
         return f"{base}/storage/v1/{signed_url_path.lstrip('/')}"
 
+    def delete_evidence_object(self, bucket_name: str, object_key: str) -> bool:
+        try:
+            clean_key = object_key.lstrip("/")
+            resp = self.client.delete(f"object/{bucket_name}", json={"prefixes": [clean_key]})
+            return resp.status_code in (200, 204)
+        except Exception as exc:
+            logger.warning("Failed to remove object '%s' from Supabase bucket '%s': %s", object_key, bucket_name, exc)
+            return False
+
 
 class StorageManager:
     """
@@ -508,6 +525,10 @@ class StorageManager:
             object_key=object_key,
             expires_seconds=expires_seconds,
         )
+
+    def delete_evidence_object(self, bucket_name: str, object_key: str) -> bool:
+        self._sync_client()
+        return self.driver.delete_evidence_object(bucket_name=bucket_name, object_key=object_key)
 
 
 storage = StorageManager()

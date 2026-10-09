@@ -1378,3 +1378,121 @@ async def list_emails(
         except Exception:
             pass
     return resp
+
+
+class DeleteEmailResponse(BaseModel):
+    success: bool
+    message: str
+    email_id: str
+
+
+class BatchDeleteEmailRequest(BaseModel):
+    email_ids: List[uuid.UUID]
+
+
+class BatchDeleteEmailResponse(BaseModel):
+    success: bool
+    deleted_count: int
+    deleted_ids: List[str]
+
+
+@router.delete(
+    "/{email_id}",
+    response_model=DeleteEmailResponse,
+    summary="Permanently Delete an Email and All Related Forensic Records",
+    description="Completely purges the email, MinIO binary objects, attachments, forensic analysis, DNA strands, reports, and caches.",
+)
+async def delete_email(
+    email_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> DeleteEmailResponse:
+    """Permanently deletes an email, all its evidence, analysis, reports, and custody records."""
+    stmt = (
+        select(Email, EmailSource)
+        .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+        .where(Email.id == email_id)
+    )
+    res = await db.execute(stmt)
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Email with ID '{email_id}' not found")
+
+    email_obj, source_obj = row
+    source_org_id = source_obj.organization_id if source_obj else None
+    if source_org_id is not None and current_user.role_code not in CROSS_ORG_ROLES and source_org_id != current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied for this email")
+
+    is_owner = source_obj is not None and source_obj.user_id == current_user.id
+    if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES and not is_owner:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to delete this email")
+
+    from app.services.email_deletion_service import default_email_deletion_service
+    deleted = await default_email_deletion_service.delete_email_cascade(
+        email_id=email_id,
+        db=db,
+        actor_user_id=current_user.id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Email '{email_id}' not found")
+
+    return DeleteEmailResponse(
+        success=True,
+        message="Email and all associated forensic data successfully purged.",
+        email_id=str(email_id),
+    )
+
+
+@router.post(
+    "/batch-delete",
+    response_model=BatchDeleteEmailResponse,
+    summary="Batch Delete Emails",
+    description="Permanently purges multiple selected emails and all related forensic data.",
+)
+async def batch_delete_emails(
+    payload: BatchDeleteEmailRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> BatchDeleteEmailResponse:
+    """Permanently deletes multiple emails and their associated data."""
+    if not payload.email_ids:
+        return BatchDeleteEmailResponse(success=True, deleted_count=0, deleted_ids=[])
+
+    from app.services.email_deletion_service import default_email_deletion_service
+
+    deleted_ids = []
+    for eid in payload.email_ids:
+        try:
+            stmt = (
+                select(Email, EmailSource)
+                .outerjoin(EmailSource, Email.source_id == EmailSource.id)
+                .where(Email.id == eid)
+            )
+            res = await db.execute(stmt)
+            row = res.first()
+            if not row:
+                continue
+            email_obj, source_obj = row
+            source_org_id = source_obj.organization_id if source_obj else None
+            if source_org_id is not None and current_user.role_code not in CROSS_ORG_ROLES and source_org_id != current_user.organization_id:
+                continue
+            is_owner = source_obj is not None and source_obj.user_id == current_user.id
+            if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES and not is_owner:
+                continue
+
+            del_ok = await default_email_deletion_service.delete_email_cascade(
+                email_id=eid,
+                db=db,
+                actor_user_id=current_user.id,
+            )
+            if del_ok:
+                deleted_ids.append(str(eid))
+        except Exception as e:
+            logger.warning(f"Error deleting email {eid} in batch: {e}")
+
+    return BatchDeleteEmailResponse(
+        success=True,
+        deleted_count=len(deleted_ids),
+        deleted_ids=deleted_ids,
+    )
+

@@ -22,10 +22,13 @@ import {
   UserCheck,
   AlertTriangle,
   ArrowLeft,
+  Trash2,
+  AlertOctagon,
 } from 'lucide-react';
 import {
   uploadEmlFile,
   getEmailDetails,
+  deleteEmail,
   getJobStatus,
   getEmailHeaders,
   getEmailAuthResults,
@@ -276,6 +279,47 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
   const [graphData, setGraphData] = useState<InvestigationGraphResponse | null>(null);
   const [domainIntelData, setDomainIntelData] = useState<EmailDomainIntelResponse | null>(null);
   const [infraIntelData, setInfraIntelData] = useState<EmailInfrastructureResponse | null>(null);
+
+  // Deletion State
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDeleteCurrentEmail = async () => {
+    if (!selectedEmailId) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteEmail(selectedEmailId);
+      globalDossierCache.delete(selectedEmailId);
+      // Clear whole data regarding this email in this panel immediately
+      setSelectedEmailId('');
+      setEmailDetails(null);
+      setHeadersData(null);
+      setAuthData(null);
+      setHopsData(null);
+      setStructureData(null);
+      setArtifactsData(null);
+      setThreatIntelData(null);
+      setAnalysisData(null);
+      setDnaData(null);
+      setSimilarityData([]);
+      setCorrelationsData(null);
+      setMembershipsData(null);
+      setGraphData(null);
+      setDomainIntelData(null);
+      setInfraIntelData(null);
+      setActiveJob(null);
+      setDeleteConfirmOpen(false);
+      if (onBackToHistory) {
+        onBackToHistory();
+      }
+    } catch (err: any) {
+      setDeleteError(err?.response?.data?.detail || err?.message || 'Failed to delete email artifact.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -882,6 +926,15 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
                     <ExternalLink className="w-3.5 h-3.5" />
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50/80 dark:bg-rose-500/10 hover:bg-rose-600 hover:text-white border border-rose-200 dark:border-rose-500/20 text-rose-700 dark:text-rose-400 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+                  title="Permanently delete this email artifact and purge all data"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Email</span>
+                </button>
               </div>
             </div>
 
@@ -1504,6 +1557,78 @@ export const AnalysisWorkspace: React.FC<AnalysisWorkspaceProps> = ({
               />
             </div>
           )}
+        </div>
+      )}
+
+      {/* Permanent Deletion Confirmation Modal */}
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white dark:bg-workspace-card rounded-2xl border border-slate-200 dark:border-workspace-border shadow-2xl p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-slate-900 dark:text-text-primary leading-tight">
+                  Permanently Delete Forensic Case?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-text-muted mt-1 leading-relaxed">
+                  Are you sure you want to delete this email? All data regarding it will be permanently wiped from this panel and the database:
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-rose-50/70 dark:bg-rose-500/10 border border-rose-200/80 dark:border-rose-500/20 text-[11px] text-rose-900 dark:text-rose-300 space-y-1.5 font-medium">
+              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px] text-rose-700 dark:text-rose-400">
+                <AlertOctagon className="w-3 h-3" /> Cascading Purge Scope:
+              </div>
+              <ul className="list-disc pl-4 space-y-0.5 text-rose-800 dark:text-rose-300/90">
+                <li>Original .EML file & evidence attachments in MinIO storage</li>
+                <li>All forensic reports, dossiers & investigation graphs</li>
+                <li>5-strand DNA profiles & correlation link graphs</li>
+                <li>RFC822 transmission headers, relay hops & authentication results</li>
+                <li>Threat scores, findings, sightings & cached telemetry</li>
+              </ul>
+            </div>
+
+            {deleteError && (
+              <div className="p-3 rounded-lg bg-red-100 border border-red-300 text-red-800 text-xs font-semibold">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => {
+                  setDeleteConfirmOpen(false);
+                  setDeleteError(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-workspace-border text-slate-700 dark:text-text-secondary text-xs font-semibold hover:bg-slate-100 dark:hover:bg-workspace-secondary transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleDeleteCurrentEmail}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Purging Data…</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Permanently Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

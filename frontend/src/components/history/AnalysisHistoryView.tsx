@@ -20,6 +20,10 @@ import {
   UserCheck,
   Clock,
   Star,
+  Trash2,
+  AlertOctagon,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import {
   listEmails,
@@ -28,6 +32,8 @@ import {
   getEmailAuthResults,
   getEmailHeaders,
   getEmailArtifacts,
+  deleteEmail,
+  batchDeleteEmails,
   EmailDetailResponse,
 } from '../../services/api';
 import { AnalysisWorkspace } from '../workspace/AnalysisWorkspace';
@@ -74,7 +80,17 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<QualificationFilter>('ALL');
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [inspectingEmailId, setInspectingEmailId] = useState<string | null>(initialEmailId || null);
+
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState<{
+    isOpen: boolean;
+    emailIds: string[];
+    title: string;
+  }>({ isOpen: false, emailIds: [], title: '' });
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [successToast, setSuccessToast] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialEmailId) {
@@ -97,6 +113,61 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
       setError(err?.response?.data?.detail || 'Could not load analysis history from the backend.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleSelect = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.size === filtered.length && filtered.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((e) => e.id)));
+    }
+  };
+
+  const executeDelete = async () => {
+    if (!confirmDeleteModal.emailIds.length) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      const idsToDelete = confirmDeleteModal.emailIds;
+      if (idsToDelete.length === 1) {
+        await deleteEmail(idsToDelete[0]);
+      } else {
+        await batchDeleteEmails(idsToDelete);
+      }
+      const idSet = new Set(idsToDelete);
+      setEmails((prev) => prev.filter((e) => !idSet.has(e.id)));
+      setTotal((prev) => Math.max(0, prev - idsToDelete.length));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        idsToDelete.forEach((id) => next.delete(id));
+        return next;
+      });
+      if (expandedEmailId && idSet.has(expandedEmailId)) {
+        setExpandedEmailId(null);
+      }
+      if (inspectingEmailId && idSet.has(inspectingEmailId)) {
+        setInspectingEmailId(null);
+      }
+      setSuccessToast(
+        `Successfully deleted ${idsToDelete.length} email artifact${idsToDelete.length > 1 ? 's' : ''} and purged all associated reports, attachments, and forensic data.`
+      );
+      setConfirmDeleteModal({ isOpen: false, emailIds: [], title: '' });
+      setTimeout(() => setSuccessToast(null), 4000);
+    } catch (err: any) {
+      setDeleteError(err?.response?.data?.detail || err?.message || 'Failed to delete email artifact.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -199,7 +270,10 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
         <AnalysisWorkspace
           initialEmailId={inspectingEmailId}
           isHistoryMode={true}
-          onBackToHistory={() => setInspectingEmailId(null)}
+          onBackToHistory={() => {
+            setInspectingEmailId(null);
+            loadHistory(true);
+          }}
           onOpenReport={onOpenReport}
           onExploreGeo={onExploreGeo}
           onExploreGraph={onExploreGraph}
@@ -365,6 +439,18 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
         </div>
       </div>
 
+      {successToast && (
+        <div className="px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs flex items-center justify-between animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>{successToast}</span>
+          </div>
+          <button onClick={() => setSuccessToast(null)} className="text-emerald-600 hover:text-emerald-800 font-bold px-2">
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -374,6 +460,43 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
           <button onClick={() => setError(null)} className="text-text-muted hover:text-rose-300 font-bold px-2">
             Dismiss
           </button>
+        </div>
+      )}
+
+      {/* Multi-Select Batch Actions Bar (Visible when >= 1 selected) */}
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-white shadow-lg animate-in fade-in slide-in-from-top-2 duration-150">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+            <span className="text-xs font-bold font-mono">
+              {selectedIds.size} case{selectedIds.size > 1 ? 's' : ''} selected
+            </span>
+            <span className="text-xs text-slate-400">
+              (out of {filtered.length} visible)
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium transition-colors cursor-pointer"
+            >
+              Deselect All
+            </button>
+            <button
+              onClick={() => {
+                const count = selectedIds.size;
+                setConfirmDeleteModal({
+                  isOpen: true,
+                  emailIds: Array.from(selectedIds),
+                  title: `Permanently Delete ${count} Selected Email Artifact${count > 1 ? 's' : ''}?`,
+                });
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all shadow-sm cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedIds.size})</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -420,7 +543,18 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
         {/* Table Header Bar - Modern Light SOC Style */}
         <div className="grid grid-cols-12 gap-2 px-4 py-3 bg-slate-50/90 border-b border-slate-200/80 text-[11px] font-bold text-slate-600 uppercase tracking-wider items-center select-none">
           <div className="col-span-4 sm:col-span-3 flex items-center gap-2">
-            <span className="w-4" /> {/* Spacing */}
+            <button
+              type="button"
+              onClick={handleSelectAll}
+              className="text-slate-400 hover:text-brand transition-colors p-0.5 shrink-0"
+              title={selectedIds.size > 0 && selectedIds.size === filtered.length ? 'Deselect All' : 'Select All Filtered'}
+            >
+              {selectedIds.size > 0 && selectedIds.size === filtered.length ? (
+                <CheckSquare className="w-4 h-4 text-brand" />
+              ) : (
+                <Square className="w-4 h-4 text-slate-400" />
+              )}
+            </button>
             <span>Sender</span>
           </div>
           <div className="col-span-5 sm:col-span-6">Subject & Forensic Details</div>
@@ -509,8 +643,20 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
                       isExpanded ? 'ring-1 ring-brand/40 bg-workspace-card' : ''
                     }`}
                   >
-                    {/* Sender + Star (No Checkbox) */}
-                    <div className="col-span-4 sm:col-span-3 flex items-center gap-2.5 min-w-0">
+                    {/* Sender + Checkbox + Star */}
+                    <div className="col-span-4 sm:col-span-3 flex items-center gap-2 min-w-0">
+                      <button
+                        type="button"
+                        onClick={(e) => toggleSelect(em.id, e)}
+                        className="text-slate-400 hover:text-brand transition-colors p-0.5 shrink-0"
+                        title={selectedIds.has(em.id) ? 'Deselect' : 'Select'}
+                      >
+                        {selectedIds.has(em.id) ? (
+                          <CheckSquare className="w-4 h-4 text-brand" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400" />
+                        )}
+                      </button>
                       <button
                         onClick={(e) => toggleStar(em.id, e)}
                         className="text-text-muted hover:text-amber-400 shrink-0 transition-colors"
@@ -564,6 +710,21 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
                         title="Open Stored Forensic Results"
                       >
                         Results →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmDeleteModal({
+                            isOpen: true,
+                            emailIds: [em.id],
+                            title: `Delete "${em.subject || em.original_filename || 'Email Artifact'}"?`,
+                          });
+                        }}
+                        className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors cursor-pointer"
+                        title="Permanently delete this email and all forensic reports/data"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                       <span className="text-xs font-mono text-text-muted whitespace-nowrap hidden sm:inline">
                         {em.received_at || em.created_at ? new Date(em.received_at || em.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'Recent'}
@@ -628,6 +789,20 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
                                 <FileCheck className="w-3.5 h-3.5 text-brand" />
                               </button>
                             )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmDeleteModal({
+                                  isOpen: true,
+                                  emailIds: [em.id],
+                                  title: `Delete "${em.subject || em.original_filename || 'Email Artifact'}"?`,
+                                });
+                              }}
+                              className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-rose-50/80 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 text-rose-700 dark:text-rose-400 font-semibold text-xs hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                            >
+                              <span>Purge All Case & Report Data</span>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -692,6 +867,78 @@ export const AnalysisHistoryView: React.FC<AnalysisHistoryViewProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Permanent Deletion Confirmation Modal */}
+      {confirmDeleteModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white dark:bg-workspace-card rounded-2xl border border-slate-200 dark:border-workspace-border shadow-2xl p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-slate-900 dark:text-text-primary leading-tight">
+                  {confirmDeleteModal.title}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-text-muted mt-1 leading-relaxed">
+                  This action is permanent and cannot be undone. All data regarding this email will be completely deleted across all panels:
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-rose-50/70 dark:bg-rose-500/10 border border-rose-200/80 dark:border-rose-500/20 text-[11px] text-rose-900 dark:text-rose-300 space-y-1.5 font-medium">
+              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px] text-rose-700 dark:text-rose-400">
+                <AlertOctagon className="w-3 h-3" /> Data Scheduled for Immediate Purge:
+              </div>
+              <ul className="list-disc pl-4 space-y-0.5 text-rose-800 dark:text-rose-300/90">
+                <li>Original .EML file & extracted attachments in MinIO evidence vault</li>
+                <li>All generated forensic reports & executive dossiers</li>
+                <li>5-Strand DNA profiles, embedding vectors & similarity correlation links</li>
+                <li>Relay hops, RFC822 headers & authentication records</li>
+                <li>Threat classifications, findings, IOC sightings & cached telemetry</li>
+              </ul>
+            </div>
+
+            {deleteError && (
+              <div className="p-3 rounded-lg bg-red-100 border border-red-300 text-red-800 text-xs font-semibold">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => {
+                  setConfirmDeleteModal({ isOpen: false, emailIds: [], title: '' });
+                  setDeleteError(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-workspace-border text-slate-700 dark:text-text-secondary text-xs font-semibold hover:bg-slate-100 dark:hover:bg-workspace-secondary transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={executeDelete}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Purging Data…</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Permanently Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

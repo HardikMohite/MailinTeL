@@ -1065,6 +1065,32 @@ export const listEmails = async (
   return response.data;
 };
 
+export interface DeleteEmailResponse {
+  success: boolean;
+  message: string;
+  email_id: string;
+}
+
+export interface BatchDeleteEmailResponse {
+  success: boolean;
+  deleted_count: number;
+  deleted_ids: string[];
+}
+
+export const deleteEmail = async (emailId: string): Promise<DeleteEmailResponse> => {
+  const response = await apiClient.delete<DeleteEmailResponse>(`/emails/${emailId}`);
+  invalidateApiCache();
+  return response.data;
+};
+
+export const batchDeleteEmails = async (emailIds: string[]): Promise<BatchDeleteEmailResponse> => {
+  const response = await apiClient.post<BatchDeleteEmailResponse>('/emails/batch-delete', {
+    email_ids: emailIds,
+  });
+  invalidateApiCache();
+  return response.data;
+};
+
 export const getEvidenceMetadata = async (evidenceId: string): Promise<EvidenceObjectResponse> => {
   const response = await apiClient.get<EvidenceObjectResponse>(`/evidence/${evidenceId}`);
   return response.data;
