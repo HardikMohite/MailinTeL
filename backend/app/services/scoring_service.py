@@ -209,6 +209,38 @@ async def execute_email_analysis_and_scoring(
         f"Confidence={scoring_result.evidence_confidence_score}, Findings={len(scoring_result.findings)}"
     )
 
+    # Broadcast real-time threat alert over WebSocket if phishing or suspicious
+    try:
+        from app.api.v1.endpoints.notifications_ws import notification_manager
+        classification_upper = (scoring_result.threat_classification or "").upper()
+        subj_preview = (email_obj.subject or "Untitled Message")[:40]
+        if classification_upper == "PHISHING" or scoring_result.threat_risk_score >= 70:
+            await notification_manager.broadcast({
+                "type": "PHISHING_ALERT",
+                "title": f"Phishing Threat Flagged: {subj_preview}",
+                "message": f"Threat score {scoring_result.threat_risk_score}/100 from {email_obj.sender_address or 'Unknown'}. Immediate SOC review recommended.",
+                "severity": "critical",
+                "data": {
+                    "email_id": str(email_id),
+                    "threat_classification": scoring_result.threat_classification,
+                    "threat_risk_score": scoring_result.threat_risk_score,
+                }
+            })
+        elif classification_upper == "SUSPICIOUS" or scoring_result.threat_risk_score >= 40:
+            await notification_manager.broadcast({
+                "type": "SUSPICIOUS_ALERT",
+                "title": f"Suspicious Anomaly Flagged: {subj_preview}",
+                "message": f"Threat score {scoring_result.threat_risk_score}/100 from {email_obj.sender_address or 'Unknown'}.",
+                "severity": "high",
+                "data": {
+                    "email_id": str(email_id),
+                    "threat_classification": scoring_result.threat_classification,
+                    "threat_risk_score": scoring_result.threat_risk_score,
+                }
+            })
+    except Exception as ws_err:
+        logger.debug(f"Could not broadcast scoring result over WebSocket: {ws_err}")
+
     return {
         "analysis_run_id": str(analysis_run.id),
         "email_id": str(email_id),

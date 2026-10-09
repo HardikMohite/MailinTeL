@@ -28,6 +28,10 @@ async def init_admin_account(db: Optional[AsyncSession] = None) -> bool:
         existing_res = await session.execute(select(User).where(User.email == admin_email))
         existing_user = existing_res.scalar_one_or_none()
         if existing_user is not None:
+            uname = getattr(existing_user, "username", None)
+            if uname is None:
+                existing_user.username = "admin"
+                await session.commit()
             return False
 
         now = datetime.now(timezone.utc)
@@ -65,6 +69,7 @@ async def init_admin_account(db: Optional[AsyncSession] = None) -> bool:
         user = User(
             id=uuid.uuid4(),
             email=admin_email,
+            username=getattr(settings, "ADMIN_USERNAME", None) or "admin",
             full_name=settings.ADMIN_FULL_NAME or "Administrator",
             password_hash=hash_password(settings.ADMIN_PASSWORD),
             auth_provider="LOCAL",

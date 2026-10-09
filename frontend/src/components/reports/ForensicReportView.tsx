@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Download,
-  Printer,
   Copy,
   Check,
   Shield,
@@ -14,9 +13,16 @@ import {
   FileCode,
   AlertCircle,
   ShieldCheck,
+  ShieldAlert,
   Fingerprint,
   FileCheck,
   Award,
+  Search,
+  X,
+  CheckSquare,
+  Square,
+  Mail,
+  Star,
 } from 'lucide-react';
 import { StatusBadge, SeverityLevel } from '../common/StatusBadge';
 import {
@@ -28,6 +34,7 @@ import {
   generateEmailReport,
   generateCampaignReport,
   exportEmailReport,
+  exportBatchPdfReport,
   verifyEmailIntegrity,
   verifyReportIntegrity,
   ReportIntegrityVerification,
@@ -90,6 +97,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
   const [rawHtml, setRawHtml] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [generating, setGenerating] = useState<boolean>(false);
+  const [downloading, setDownloading] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +107,83 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
   const [verificationResult, setVerificationResult] = useState<ReportIntegrityVerification | null>(null);
   const [verifyingIntegrity, setVerifyingIntegrity] = useState<boolean>(false);
   const [verifySuccessToast, setVerifySuccessToast] = useState<boolean>(false);
+
+  const [selectedEmailIds, setSelectedEmailIds] = useState<Set<string>>(new Set());
+  const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
+  const [reportFilter, setReportFilter] = useState<'ALL' | 'MALICIOUS' | 'SUSPICIOUS' | 'SAFE'>('ALL');
+  const [reportSearch, setReportSearch] = useState<string>('');
+
+  const toggleSelectEmail = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedEmailIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleStar = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setStarredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const filteredEmails = useMemo(() => {
+    return emails.filter((em) => {
+      const score = em.threat_risk_score ?? 0;
+      if (reportFilter === 'MALICIOUS' && score < 65) return false;
+      if (reportFilter === 'SUSPICIOUS' && (score < 35 || score >= 65)) return false;
+      if (reportFilter === 'SAFE' && score >= 35) return false;
+
+      if (reportSearch.trim()) {
+        const q = reportSearch.toLowerCase();
+        const matchSub = em.subject?.toLowerCase().includes(q);
+        const matchSender = (em.sender_address || em.sender_display_name)?.toLowerCase().includes(q);
+        const matchSha = em.sha256_hash?.toLowerCase().includes(q);
+        if (!matchSub && !matchSender && !matchSha) return false;
+      }
+      return true;
+    });
+  }, [emails, reportFilter, reportSearch]);
+
+  const toggleSelectAll = () => {
+    if (selectedEmailIds.size === filteredEmails.length && filteredEmails.length > 0) {
+      setSelectedEmailIds(new Set());
+    } else {
+      setSelectedEmailIds(new Set(filteredEmails.map((e) => e.id)));
+    }
+  };
+
+  const handleBatchGenerate = async () => {
+    if (selectedEmailIds.size === 0) return;
+    setGenerating(true);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      const ids = Array.from(selectedEmailIds);
+      let successCount = 0;
+      for (const id of ids) {
+        await generateEmailReport(id, 'html');
+        successCount++;
+      }
+      setSuccessMsg(`Successfully compiled and sealed ${successCount} forensic reports for selected cases.`);
+      const repRes = await listReports();
+      setHistoricalReports(repRes.reports || []);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message || 'Batch report generation failed.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const maliciousCount = useMemo(() => emails.filter((e) => (e.threat_risk_score ?? 0) >= 65).length, [emails]);
+  const suspiciousCount = useMemo(() => emails.filter((e) => (e.threat_risk_score ?? 0) >= 35 && (e.threat_risk_score ?? 0) < 65).length, [emails]);
+  const safeCount = useMemo(() => emails.filter((e) => (e.threat_risk_score ?? 0) < 35).length, [emails]);
 
   // Load selection options and historical reports
   useEffect(() => {
@@ -238,72 +323,99 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
     }
   };
 
-  const handleDownload = async (format: 'html' | 'markdown' | 'json' | 'pdf') => {
-    if (!reportData) return;
-    const emailOrCampId = (selectedEmailId || selectedCampaignId).slice(0, 8);
-    const filename = `MailIntel_Forensic_Report_${emailOrCampId}.${
-      format === 'markdown' ? 'md' : format
-    }`;
+  const handleDownloadSinglePdf = async (emailId?: string) => {
+    const targetId = emailId || selectedEmailId;
+    if (!targetId) return;
+    const shortId = targetId.slice(0, 8);
+    const filename = `MailIntel_Forensic_Report_${shortId}.pdf`;
 
-    if (format === 'pdf' && selectedEmailId) {
+    setDownloading(true);
+    setError(null);
+    try {
+      const blobData = await exportEmailReport(targetId, 'pdf');
+      const blob = blobData instanceof Blob ? blobData : new Blob([blobData as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('PDF export failed:', err);
+      setError(`Failed to generate PDF forensic report: ${err.response?.data?.detail || err.message || 'Server error'}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDownloadBatchPdf = async (emailIds?: string[]) => {
+    const targetIds = emailIds && emailIds.length > 0 ? emailIds : Array.from(selectedEmailIds);
+    if (!targetIds || targetIds.length === 0) return;
+
+    if (targetIds.length === 1) {
+      await handleDownloadSinglePdf(targetIds[0]);
+      return;
+    }
+
+    setDownloading(true);
+    setError(null);
+    try {
+      const filename = `MailIntel_Consolidated_Forensic_Report_${targetIds.length}_Cases.pdf`;
+      const blobData = await exportBatchPdfReport(targetIds);
+      const blob = blobData instanceof Blob ? blobData : new Blob([blobData as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('Batch PDF export failed:', err);
+      setError(`Failed to generate batch PDF report: ${err.response?.data?.detail || err.message || 'Server error'}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (selectedEmailIds.size > 1) {
+      await handleDownloadBatchPdf(Array.from(selectedEmailIds));
+      return;
+    }
+
+    if (selectedEmailId) {
+      await handleDownloadSinglePdf(selectedEmailId);
+      return;
+    }
+
+    if (selectedCampaignId) {
+      const emailOrCampId = selectedCampaignId.slice(0, 8);
+      setDownloading(true);
+      setError(null);
       try {
-        const blobData = await exportEmailReport(selectedEmailId, 'pdf');
-        const blob = blobData instanceof Blob ? blobData : new Blob([blobData as any], { type: 'application/pdf' });
+        const content = rawHtml || JSON.stringify(reportData, null, 2);
+        const blob = new Blob([content], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = filename;
+        a.download = `MailIntel_Campaign_Report_${emailOrCampId}.html`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-      } catch (err: any) {
-        setError(`Failed to download PDF: ${err?.message || 'Server error'}`);
+      } catch (campErr: any) {
+        setError(`Failed to download campaign report: ${campErr?.message || 'Server error'}`);
+      } finally {
+        setDownloading(false);
       }
       return;
     }
 
-    let content = '';
-    let mimeType = 'text/plain';
-
-    if (format === 'html') {
-      if (rawHtml) {
-        content = rawHtml;
-      } else if (selectedEmailId) {
-        try {
-          content = await exportEmailReport(selectedEmailId, 'html');
-          setRawHtml(content);
-        } catch {
-          content = '<html><body>Report Content</body></html>';
-        }
-      }
-      mimeType = 'text/html';
-    } else if (format === 'markdown') {
-      if (rawMarkdown) {
-        content = rawMarkdown;
-      } else if (selectedEmailId) {
-        try {
-          content = await exportEmailReport(selectedEmailId, 'markdown');
-          setRawMarkdown(content);
-        } catch {
-          content = '# Report Content';
-        }
-      }
-      mimeType = 'text/markdown';
-    } else {
-      content = JSON.stringify(reportData, null, 2);
-      mimeType = 'application/json';
-    }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setDownloading(false);
   };
 
   const handleCopyContent = () => {
@@ -326,16 +438,6 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handlePrint = () => {
-    if (viewFormat === 'html_preview') {
-      const iframe = document.getElementById('report-html-frame') as HTMLIFrameElement;
-      if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.print();
-        return;
-      }
-    }
-    window.print();
-  };
 
   const meta = reportData?.email_metadata || {};
   const scores = reportData?.explainable_scores || {};
@@ -355,7 +457,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
 
   const viewTabs: { id: ViewFormat; label: string; icon: React.ReactNode }[] = [
     { id: 'dossier', label: 'Forensic Dossier', icon: <Eye className="w-3.5 h-3.5" /> },
-    { id: 'html_preview', label: 'Printable Preview', icon: <FileCode className="w-3.5 h-3.5" /> },
+    { id: 'html_preview', label: 'HTML View', icon: <FileCode className="w-3.5 h-3.5" /> },
     { id: 'markdown', label: 'Markdown Source', icon: <Code className="w-3.5 h-3.5" /> },
     { id: 'json', label: 'JSON Schema (Audit)', icon: <Database className="w-3.5 h-3.5" /> },
   ];
@@ -406,19 +508,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
               </button>
             </div>
 
-            {reportType === 'email' ? (
-              <select
-                value={selectedEmailId}
-                onChange={(e) => setSelectedEmailId(e.target.value)}
-                className="bg-workspace border border-workspace-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-brand max-w-[260px] truncate"
-              >
-                {emails.map((em) => (
-                  <option key={em.id} value={em.id}>
-                    {em.subject || 'No Subject'} ({em.sender_address || 'Unknown'})
-                  </option>
-                ))}
-              </select>
-            ) : (
+            {reportType === 'campaign' && (
               <select
                 value={selectedCampaignId}
                 onChange={(e) => setSelectedCampaignId(e.target.value)}
@@ -438,10 +528,274 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
               className="flex items-center gap-1.5 bg-brand hover:bg-brand/90 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin' : ''}`} />
-              <span>{generating ? 'Sealing Report…' : 'Generate & Seal Artifact'}</span>
+              <span>{generating ? 'Sealing Report…' : 'Generate & Seal Active Artifact'}</span>
             </button>
           </div>
         </div>
+
+        {/* If reportType === 'email', render the Gmail-Style Email Stack with Multi-Select and Filters */}
+        {reportType === 'email' && (
+          <div className="space-y-3 pt-3 mt-4 border-t border-workspace-border">
+            {/* Stack Filter & Search Bar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 bg-workspace rounded-xl border border-workspace-border">
+              {/* Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                <button
+                  onClick={() => setReportFilter('ALL')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                    reportFilter === 'ALL'
+                      ? 'bg-slate-800 text-white border border-slate-700 shadow-xs'
+                      : 'text-text-muted hover:text-text-primary hover:bg-workspace-card'
+                  }`}
+                >
+                  All Cases ({emails.length})
+                </button>
+                <button
+                  onClick={() => setReportFilter('MALICIOUS')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    reportFilter === 'MALICIOUS'
+                      ? 'bg-red-500/20 text-red-300 border border-red-500/40 shadow-xs'
+                      : 'text-text-muted hover:text-red-400 hover:bg-red-500/10'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-red-400 inline-block animate-pulse" />
+                  Threats ({maliciousCount})
+                </button>
+                <button
+                  onClick={() => setReportFilter('SUSPICIOUS')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    reportFilter === 'SUSPICIOUS'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
+                      : 'text-text-muted hover:text-amber-400 hover:bg-amber-500/10'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                  Suspicious ({suspiciousCount})
+                </button>
+                <button
+                  onClick={() => setReportFilter('SAFE')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    reportFilter === 'SAFE'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs'
+                      : 'text-text-muted hover:text-emerald-400 hover:bg-emerald-500/10'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+                  Clean ({safeCount})
+                </button>
+              </div>
+
+              {/* Search Box */}
+              <div className="relative min-w-[220px] sm:w-72">
+                <Search className="w-3.5 h-3.5 text-text-muted absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={reportSearch}
+                  onChange={(e) => setReportSearch(e.target.value)}
+                  placeholder="Filter subject, sender, or hash…"
+                  className="w-full pl-9 pr-8 py-1.5 text-xs bg-workspace-card border border-workspace-border rounded-lg text-text-primary placeholder:text-text-muted focus:outline-none focus:border-brand font-mono placeholder:font-sans"
+                />
+                {reportSearch && (
+                  <button
+                    onClick={() => setReportSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Multi-Select Batch Actions Bar (Visible when >= 1 selected) */}
+            {selectedEmailIds.size > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-brand/10 border border-brand/30 text-xs animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckSquare className="w-4 h-4 text-brand shrink-0" />
+                  <span className="font-semibold text-text-primary">
+                    {selectedEmailIds.size} case{selectedEmailIds.size > 1 ? 's' : ''} selected
+                  </span>
+                  <span className="text-text-muted font-mono">
+                    (out of {filteredEmails.length})
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDownloadBatchPdf(Array.from(selectedEmailIds))}
+                    disabled={downloading}
+                    className="px-3.5 py-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white font-semibold transition-all flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer"
+                    title="Download Consolidated PDF Report for all selected cases"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${downloading ? 'animate-bounce' : ''}`} />
+                    <span>Download Consolidated PDF ({selectedEmailIds.size} Cases)</span>
+                  </button>
+                  <button
+                    onClick={handleBatchGenerate}
+                    disabled={generating}
+                    className="px-3 py-1.5 rounded-lg bg-workspace border border-workspace-border hover:bg-workspace-hover text-text-primary font-semibold transition-all flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin' : ''}`} />
+                    <span>Seal Evidence ({selectedEmailIds.size})</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedEmailIds(new Set())}
+                    className="px-2.5 py-1.5 rounded-lg bg-workspace border border-workspace-border text-text-muted hover:text-text-primary font-medium transition-colors"
+                  >
+                    Clear Selection
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Gmail-Style Mail Stack List */}
+            <div className="rounded-xl bg-workspace border border-workspace-border overflow-hidden shadow-xs">
+              <div className="grid grid-cols-12 gap-2 px-4 py-3 bg-slate-50/90 border-b border-slate-200/80 text-[11px] font-bold text-slate-600 uppercase tracking-wider items-center select-none">
+                <div className="col-span-4 sm:col-span-3 flex items-center gap-2.5">
+                  <button
+                    onClick={toggleSelectAll}
+                    className="text-text-muted hover:text-brand transition-colors p-0.5"
+                    title={selectedEmailIds.size === filteredEmails.length && filteredEmails.length > 0 ? 'Deselect all' : 'Select all'}
+                  >
+                    {selectedEmailIds.size === filteredEmails.length && filteredEmails.length > 0 ? (
+                      <CheckSquare className="w-4 h-4 text-brand" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-500 hover:text-text-primary" />
+                    )}
+                  </button>
+                  <span>Sender</span>
+                </div>
+                <div className="col-span-5 sm:col-span-6">Subject & Forensic Details</div>
+                <div className="hidden sm:block sm:col-span-2 text-center">Verdict</div>
+                <div className="col-span-3 sm:col-span-1 text-right">Date</div>
+              </div>
+
+              {filteredEmails.length === 0 ? (
+                <div className="p-10 text-center space-y-2">
+                  <Mail className="w-8 h-8 text-text-muted/40 mx-auto" />
+                  <p className="text-xs font-semibold text-text-primary">No cases match the filter</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-workspace-border/50 max-h-72 overflow-y-auto">
+                  {filteredEmails.map((em) => {
+                    const isChecked = selectedEmailIds.has(em.id);
+                    const isActive = selectedEmailId === em.id;
+                    const isStarred = starredIds.has(em.id);
+                    const score = em.threat_risk_score ?? 0;
+                    const isMalicious = score >= 65;
+                    const isSuspicious = score >= 35 && score < 65;
+
+                    // Platform color scheme tweaks: light green for legitimate, light red for phishing
+                    const rowBgClass = isMalicious
+                      ? 'bg-red-500/[0.08] hover:bg-red-500/[0.14] border-l-[4px] border-l-red-500'
+                      : isSuspicious
+                      ? 'bg-amber-500/[0.08] hover:bg-amber-500/[0.14] border-l-[4px] border-l-amber-500'
+                      : 'bg-emerald-500/[0.08] hover:bg-emerald-500/[0.14] border-l-[4px] border-l-emerald-500';
+
+                    const senderText = em.sender_display_name || em.sender_address || 'Unknown Sender';
+                    const snippetText = em.sender_address ? `From: ${em.sender_address}` : (em.sha256_hash ? `SHA: ${em.sha256_hash.slice(0, 14)}…` : 'Forensic Strand Verified');
+
+                    return (
+                      <div
+                        key={em.id}
+                        onClick={() => setSelectedEmailId(em.id)}
+                        className={`grid grid-cols-12 gap-2 px-4 py-2.5 items-center cursor-pointer transition-colors group select-none text-xs ${rowBgClass} ${
+                          isChecked ? 'ring-1 ring-brand/50' : ''
+                        } ${isActive ? 'shadow-inner' : ''}`}
+                      >
+                        {/* Checkbox + Star + Sender */}
+                        <div className="col-span-4 sm:col-span-3 flex items-center gap-2 min-w-0">
+                          <button
+                            onClick={(e) => toggleSelectEmail(em.id, e)}
+                            className="text-text-muted hover:text-brand transition-colors p-0.5 shrink-0"
+                            title={isChecked ? 'Deselect' : 'Select'}
+                          >
+                            {isChecked ? (
+                              <CheckSquare className="w-4 h-4 text-brand" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-500 hover:text-text-primary" />
+                            )}
+                          </button>
+                          <button
+                            onClick={(e) => toggleStar(em.id, e)}
+                            className="text-text-muted hover:text-amber-400 shrink-0 transition-colors"
+                            title={isStarred ? 'Unstar' : 'Star Case'}
+                          >
+                            <Star className={`w-4 h-4 ${isStarred ? 'text-amber-400 fill-amber-400' : 'text-slate-500'}`} />
+                          </button>
+                          <span className="font-bold text-xs sm:text-sm text-text-primary truncate group-hover:text-brand transition-colors">
+                            {senderText}
+                          </span>
+                        </div>
+
+                        {/* Subject + Snippet Preview */}
+                        <div className="col-span-5 sm:col-span-6 flex items-center gap-2 min-w-0 pr-2">
+                          <div className="text-xs truncate">
+                            <span className="font-semibold text-text-primary">
+                              {em.subject || em.original_filename || 'Untitled Case'}
+                            </span>
+                            <span className="text-text-muted font-normal ml-1.5 opacity-80">
+                              — {snippetText}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Verdict Pill */}
+                        <div className="hidden sm:flex sm:col-span-2 items-center justify-center">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-tight ${
+                              isMalicious
+                                ? 'bg-red-500/15 text-red-400 border border-red-500/30'
+                                : isSuspicious
+                                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                            }`}
+                          >
+                            {isMalicious ? <ShieldAlert className="w-2.5 h-2.5" /> : isSuspicious ? <AlertTriangle className="w-2.5 h-2.5" /> : <ShieldCheck className="w-2.5 h-2.5" />}
+                            <span>{em.threat_classification || (isMalicious ? 'CRITICAL' : isSuspicious ? 'SUSPICIOUS' : 'SAFE')}</span>
+                            <span className="opacity-75 font-normal">({score.toFixed(0)})</span>
+                          </span>
+                        </div>
+
+                        {/* Received Date & Active Status + Quick PDF Download */}
+                        <div className="col-span-3 sm:col-span-1 text-right flex items-center justify-end gap-2">
+                          <div>
+                            <div className="font-mono text-text-muted text-[11px] whitespace-nowrap">
+                              {em.received_at ? new Date(em.received_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'Recent'}
+                            </div>
+                            {isActive && (
+                              <div className="text-[10px] text-brand font-mono">
+                                ● Active
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownloadSinglePdf(em.id);
+                            }}
+                            className="p-1 rounded hover:bg-slate-200/80 dark:hover:bg-slate-700 text-slate-400 hover:text-brand transition-colors cursor-pointer"
+                            title="Download PDF report for this case"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Modern Table Footer Bar */}
+              <div className="px-4 py-3 bg-slate-50/90 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 select-none">
+                <span className="flex items-center gap-1.5">
+                  📋 <span className="font-semibold text-slate-800">Dossier Selection:</span> Choose an individual report or select multiple to export multi-case cross-verdicts.
+                </span>
+                <span className="font-mono text-slate-500 font-medium bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200/70">
+                  Showing {filteredEmails.length} cases
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {successMsg && (
           <div className="mt-4 px-4 py-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-400 flex items-center gap-2.5">
@@ -483,61 +837,24 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handleCopyContent}
-              disabled={!reportData}
-              className="flex items-center gap-1.5 bg-workspace hover:bg-workspace-secondary border border-workspace-border text-text-secondary hover:text-text-primary px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+              onClick={() => handleDownload()}
+              disabled={(!reportData && selectedEmailIds.size === 0) || downloading}
+              className="flex items-center gap-2 bg-brand hover:bg-brand/90 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+              title={selectedEmailIds.size > 1 ? `Download Consolidated PDF (${selectedEmailIds.size} Cases)` : "Download Sealed Forensic PDF Report"}
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? 'Copied' : 'Copy'}</span>
-            </button>
-
-            <button
-              onClick={handlePrint}
-              disabled={!reportData}
-              className="flex items-center gap-1.5 bg-workspace hover:bg-workspace-secondary border border-workspace-border text-text-secondary hover:text-text-primary px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Print / Save PDF</span>
-            </button>
-
-            <div className="relative group">
-              <button
-                disabled={!reportData}
-                className="flex items-center gap-1.5 bg-brand/10 hover:bg-brand/20 border border-brand/20 text-brand px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
-              >
+              {downloading ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
                 <Download className="w-3.5 h-3.5" />
-                <span>Export Sealed File</span>
-              </button>
-              {reportData && (
-                <div className="absolute right-0 mt-1 w-48 bg-workspace-card border border-workspace-border rounded-lg shadow-xl p-1 hidden group-hover:block z-30">
-                  <button
-                    onClick={() => handleDownload('pdf')}
-                    className="w-full text-left px-3 py-2 text-xs text-brand font-medium hover:text-brand hover:bg-workspace-secondary rounded flex items-center justify-between transition-colors"
-                  >
-                    <span>Download PDF Dossier</span>
-                    <span className="text-[10px] bg-brand/10 text-brand px-1.5 py-0.5 rounded">2-Page</span>
-                  </button>
-                  <button
-                    onClick={() => handleDownload('html')}
-                    className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-workspace-secondary rounded transition-colors"
-                  >
-                    Sealed HTML Dossier (.html)
-                  </button>
-                  <button
-                    onClick={() => handleDownload('markdown')}
-                    className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-workspace-secondary rounded transition-colors"
-                  >
-                    Forensic Markdown (.md)
-                  </button>
-                  <button
-                    onClick={() => handleDownload('json')}
-                    className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-workspace-secondary rounded transition-colors"
-                  >
-                    Signed Audit Schema (.json)
-                  </button>
-                </div>
               )}
-            </div>
+              <span>
+                {downloading
+                  ? 'Generating PDF...'
+                  : selectedEmailIds.size > 1
+                  ? `Download Consolidated PDF (${selectedEmailIds.size} Cases)`
+                  : 'Download PDF Report'}
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -578,10 +895,17 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
               Official Standalone Legal Document (CSS Print Ready)
             </span>
             <button
-              onClick={handlePrint}
-              className="text-xs bg-brand hover:bg-brand/90 text-white px-3 py-1 rounded font-semibold transition-colors"
+              onClick={() => handleDownload()}
+              disabled={downloading}
+              className="flex items-center gap-1.5 text-xs bg-brand hover:bg-brand/90 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+              title="Download Sealed Forensic PDF Report"
             >
-              Print / Save as PDF
+              {downloading ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{downloading ? 'Generating PDF...' : 'Download PDF Report'}</span>
             </button>
           </div>
           <iframe
@@ -700,7 +1024,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
                   </button>
                 </div>
                 <div className="p-1.5 rounded bg-workspace-secondary font-mono text-[10px] text-brand break-all">
-                  {meta.sha256_hash || verificationResult?.original_evidence_sha256 || '69b0f389b99e323e130091bd5813d1c7f9ba9f4353c290392e602f557fb521f4'}
+                  {meta.sha256_hash || verificationResult?.original_evidence_sha256 || 'N/A'}
                 </div>
               </div>
 
@@ -1044,7 +1368,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
               <div className="flex justify-between py-1 border-b border-workspace-border/50">
                 <span className="text-text-muted">File Size:</span>
                 <span className="font-mono text-text-primary">
-                  {(meta.file_size_bytes || 9464).toLocaleString()} bytes
+                  {(meta.file_size_bytes || 0).toLocaleString()} bytes
                 </span>
               </div>
 
@@ -1052,7 +1376,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
                 <span className="text-text-muted shrink-0">SHA-256 Hash:</span>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-brand text-[11px] truncate max-w-[480px]">
-                    {meta.sha256_hash || '69b0f389b99e323e130091bd5813d1c7f9ba9f4353c290392e602f557fb521f4'}
+                    {meta.sha256_hash || 'N/A'}
                   </span>
                   <button
                     onClick={() => handleCopyHash(meta.sha256_hash || '', 's1_sha')}
@@ -1217,13 +1541,13 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
               <div className="flex justify-between py-1 border-b border-workspace-border/50">
                 <span className="text-text-muted">Header Order Hash:</span>
                 <span className="font-mono text-text-secondary text-[11px] truncate max-w-[280px]">
-                  {dna.technical_fingerprint?.header_order_hash || '3694578e6bc352dac677be51376003aac150ec14bc3f669c8d546b37fd119942'}
+                  {dna.technical_fingerprint?.header_order_hash || 'N/A'}
                 </span>
               </div>
               <div className="flex justify-between py-1 border-b border-workspace-border/50">
                 <span className="text-text-muted">Originating IP:</span>
                 <span className="font-mono text-text-primary">
-                  {dna.infrastructure_fingerprint?.originating_ip || '77.32.148.26'}
+                  {dna.infrastructure_fingerprint?.originating_ip || 'N/A'}
                 </span>
               </div>
 
@@ -1310,19 +1634,25 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
                         </td>
                       </tr>
                     ))
-                  ) : (
+                  ) : meta.from_address && meta.from_address.includes('@') ? (
                     <tr>
                       <td className="px-4 py-2.5 font-bold font-mono text-[11px] text-text-secondary">
                         DOMAIN
                       </td>
                       <td className="px-4 py-2.5 font-mono text-text-primary">
-                        {(meta.from_address || '@brevosend.com').split('@').pop()}
+                        {meta.from_address.split('@').pop()}
                       </td>
                       <td className="px-4 py-2.5 text-text-muted">
                         Threat Intelligence
                       </td>
                       <td className="px-4 py-2.5">
                         <span className="font-bold text-emerald-400">BENIGN</span>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-3 text-center text-text-muted italic">
+                        No external indicators or suspicious domains flagged.
                       </td>
                     </tr>
                   )}
@@ -1345,7 +1675,7 @@ export const ForensicReportView: React.FC<ForensicReportViewProps> = ({
                   {sim.campaigns && sim.campaigns.length > 0 ? (
                     `Campaign: ${sim.campaigns[0].name} (Status: ${sim.campaigns[0].status || 'ACTIVE'}, Confidence: ${(sim.campaigns[0].confidence_score || 90).toFixed(0)}%)`
                   ) : (
-                    'Campaign: PhishPulse: Alibaug Travel Getaway Lure (Status: ACTIVE, Confidence: 90%)'
+                    'No linked active threat campaign identified in current corpus.'
                   )}
                 </span>
               </div>

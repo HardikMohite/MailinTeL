@@ -7,51 +7,54 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Single Unified Theme Palette from Design.md
+        // High-End Executive Blue & White Palette
         navy: {
-          sidebar: '#101C33',   // Primary Navigation Navy
-          deep: '#172641',      // Deep Intelligence Navy
-          elevated: '#20314D',  // Elevated Dark Surface
-          border: '#2A3C5C',    // Dark surface border
+          sidebar: '#FFFFFF',   // Clean White Sidebar
+          deep: '#F8FAFC',      // Crisp light surface
+          elevated: '#F1F5F9',  // Elevated Light Surface
+          border: '#E2E8F0',    // Clean slate border
         },
         workspace: {
-          DEFAULT: '#F5F7FB',   // Soft Light Main Workspace
-          card: '#FFFFFF',      // Primary Card Surface
-          secondary: '#EEF2F7', // Secondary Information Surface
-          header: '#F8FAFC',    // Quiet Header/Table Surface
-          border: '#E2E8F0',    // Light surface border
+          DEFAULT: '#F8FAFC',   // Luminous Slate-50 Workspace
+          card: '#FFFFFF',      // Pure White Card Surface
+          secondary: '#F1F5F9', // Soft structured secondary surface
+          header: '#FFFFFF',    // Pristine Table/Header Surface
+          border: '#E2E8F0',    // Refined subtle border
         },
         brand: {
-          DEFAULT: '#2563B8',   // Intelligence Blue
-          hover: '#1D4E9E',     // Hover / Active Blue
-          soft: '#EAF2FF',      // Soft Blue Surface
+          DEFAULT: '#2563EB',   // Executive Royal Cobalt Blue
+          hover: '#1D4ED8',     // Deep Vibrant Blue
+          active: '#1E40AF',    // Deep Navy-Blue Active
+          soft: '#EFF6FF',      // Ice Blue Soft Surface
+          accent: '#3B82F6',    // Electric Sky Accent
+          border: '#BFDBFE',    // Subtle Blue Border
         },
         text: {
-          primary: '#1C2B40',   // Primary text on light
-          secondary: '#627086', // Secondary text
-          muted: '#8793A5',     // Muted text
-          dark: '#EAF0F8',      // Text on dark navy
+          primary: '#0F172A',   // High-contrast slate-900
+          secondary: '#475569', // Clean slate-600
+          muted: '#94A3B8',     // Soft slate-400
+          dark: '#0F172A',      // Slate text
         },
         severity: {
           critical: {
-            DEFAULT: '#C73A32',
-            soft: '#FDECEA',
+            DEFAULT: '#DC2626',
+            soft: '#FEF2F2',
           },
           high: {
-            DEFAULT: '#D88916',
-            soft: '#FFF4DD',
+            DEFAULT: '#D97706',
+            soft: '#FFFBEB',
           },
           medium: {
-            DEFAULT: '#7C62C8',
-            soft: '#F0ECFB',
+            DEFAULT: '#2563EB',
+            soft: '#EFF6FF',
           },
           low: {
-            DEFAULT: '#3478C7',
-            soft: '#EAF3FD',
+            DEFAULT: '#0284C7',
+            soft: '#F0F9FF',
           },
           safe: {
-            DEFAULT: '#2D8B68',
-            soft: '#E8F6EF',
+            DEFAULT: '#16A34A',
+            soft: '#F0FDF4',
           },
         },
       },
@@ -60,9 +63,10 @@ export default {
         mono: ['JetBrains Mono', 'Fira Code', 'Courier New', 'monospace'],
       },
       boxShadow: {
-        'xs': '0 1px 2px 0 rgba(16, 28, 51, 0.05)',
-        'card': '0 1px 3px 0 rgba(16, 28, 51, 0.05), 0 1px 2px -1px rgba(16, 28, 51, 0.03)',
-        'card-hover': '0 12px 24px -4px rgba(16, 28, 51, 0.08), 0 4px 8px -2px rgba(16, 28, 51, 0.03)',
+        'xs': '0 1px 2px 0 rgba(15, 23, 42, 0.04)',
+        'card': '0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.02)',
+        'card-hover': '0 12px 24px -4px rgba(37, 99, 235, 0.08), 0 4px 8px -2px rgba(37, 99, 235, 0.03)',
+        'blue-glow': '0 0 20px -2px rgba(37, 99, 235, 0.25)',
       },
     },
   },

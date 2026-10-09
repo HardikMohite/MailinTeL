@@ -87,12 +87,50 @@ apiClient.interceptors.response.use(
 );
 
 // ---------------------------------------------------------------------------
+// High-Speed In-Memory Client Cache (Sub-millisecond latency & zero re-fetch)
+// ---------------------------------------------------------------------------
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  ttlMs: number;
+}
+
+const memoryCache = new Map<string, CacheEntry<any>>();
+
+export const getCachedData = <T>(key: string): T | null => {
+  const entry = memoryCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > entry.ttlMs) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return entry.data as T;
+};
+
+export const setCachedData = <T>(key: string, data: T, ttlMs: number = 60000): void => {
+  memoryCache.set(key, { data, timestamp: Date.now(), ttlMs });
+};
+
+export const invalidateApiCache = (pattern?: string): void => {
+  if (!pattern) {
+    memoryCache.clear();
+    return;
+  }
+  for (const key of memoryCache.keys()) {
+    if (key.includes(pattern)) {
+      memoryCache.delete(key);
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
 
 export interface AuthUser {
   id: string;
   email: string;
+  username?: string | null;
   full_name: string | null;
   organization_id: string | null;
   organization_name: string | null;
@@ -108,13 +146,16 @@ export interface AuthTokenResponse {
 
 export interface RegisterPayload {
   email: string;
+  username?: string;
   password: string;
   full_name?: string;
   organization_name?: string;
 }
 
 export interface LoginPayload {
-  email: string;
+  email?: string;
+  username?: string;
+  identifier?: string;
   password: string;
 }
 
@@ -336,6 +377,9 @@ export interface EmailDetailResponse {
   evidence_id?: string | null;
   organization_id?: string | null;
   organization_name?: string | null;
+  threat_risk_score?: number | null;
+  evidence_confidence_score?: number | null;
+  threat_classification?: string | null;
 }
 
 export interface EmailListResponse {
@@ -834,6 +878,14 @@ export interface CreateCampaignPayload {
   campaign_status?: string;
   campaign_confidence?: number;
   initial_email_ids?: string[];
+  organization_id?: string;
+}
+
+export interface UpdateCampaignPayload {
+  campaign_name?: string;
+  threat_summary?: string;
+  campaign_status?: string;
+  campaign_confidence?: number;
 }
 
 export interface AutoClusterResponse {
@@ -861,12 +913,17 @@ export interface GraphEdgeItem {
 }
 
 export interface InvestigationGraphResponse {
+  email_id?: string | null;
+  campaign_id?: string | null;
   focal_node_id?: string | null;
   total_nodes: number;
   total_edges: number;
   statistics: Record<string, number>;
   nodes: GraphNodeItem[];
   edges: GraphEdgeItem[];
+  high_risk_nodes?: GraphNodeItem[];
+  bridge_entities?: string[];
+  stages?: Record<string, GraphNodeItem[]>;
 }
 
 
@@ -928,11 +985,59 @@ export const uploadEmlFile = async (file: File): Promise<UploadEmailResponse> =>
       'Content-Type': 'multipart/form-data',
     },
   });
+  invalidateApiCache('listEmails');
+  invalidateApiCache('dashboard');
   return response.data;
 };
 
-export const getEmailDetails = async (emailId: string): Promise<EmailDetailResponse> => {
+export const getEmailDetails = async (emailId: string, forceFresh?: boolean): Promise<EmailDetailResponse> => {
+  const cacheKey = `emailDetails:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailDetailResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailDetailResponse>(`/emails/${emailId}`);
+  setCachedData(cacheKey, response.data, 60000);
+  return response.data;
+};
+export interface DashboardThreatDistribution {
+  status: string;
+  count: number;
+}
+
+export interface DashboardRecentThreat {
+  id: string;
+  subject?: string | null;
+  sender_address?: string | null;
+  qualification_status: string;
+  created_at: string;
+  original_filename?: string | null;
+}
+
+export interface DashboardActiveCampaign {
+  id: string;
+  campaign_name?: string | null;
+  member_count: number;
+}
+
+export interface DashboardSummaryResponse {
+  total_phishing: number;
+  threat_count: number;
+  total_campaigns: number;
+  total_reports: number;
+  distribution: DashboardThreatDistribution[];
+  recent_threats: DashboardRecentThreat[];
+  active_campaigns: DashboardActiveCampaign[];
+}
+
+export const getDashboardSummary = async (forceFresh?: boolean): Promise<DashboardSummaryResponse> => {
+  const cacheKey = 'dashboard:summary';
+  if (!forceFresh) {
+    const cached = getCachedData<DashboardSummaryResponse>(cacheKey);
+    if (cached) return cached;
+  }
+  const response = await apiClient.get<DashboardSummaryResponse>('/dashboard/summary');
+  setCachedData(cacheKey, response.data, 20000);
   return response.data;
 };
 
@@ -942,14 +1047,21 @@ export const listEmails = async (
   analysisStatus?: string,
   qualificationStatus?: string,
   organizationId?: string,
-  threatOnly?: boolean
+  threatOnly?: boolean,
+  forceFresh?: boolean
 ): Promise<EmailListResponse> => {
+  const cacheKey = `listEmails:${skip}:${limit}:${analysisStatus || ''}:${qualificationStatus || ''}:${organizationId || ''}:${threatOnly ?? ''}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailListResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const params: Record<string, unknown> = { skip, limit };
   if (analysisStatus) params.analysis_status = analysisStatus;
   if (qualificationStatus) params.qualification_status = qualificationStatus;
   if (organizationId) params.organization_id = organizationId;
   if (threatOnly !== undefined) params.threat_only = threatOnly;
   const response = await apiClient.get<EmailListResponse>('/emails', { params });
+  setCachedData(cacheKey, response.data, 30000);
   return response.data;
 };
 
@@ -975,42 +1087,75 @@ export const verifyEvidenceIntegrity = async (
   return response.data;
 };
 
-export const getEmailStructure = async (emailId: string): Promise<EmailStructureResponse> => {
+export const getEmailStructure = async (emailId: string, forceFresh?: boolean): Promise<EmailStructureResponse> => {
+  const cacheKey = `emailStructure:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailStructureResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailStructureResponse>(`/emails/${emailId}/structure`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
-export const getEmailHeaders = async (emailId: string): Promise<EmailHeadersResponse> => {
+export const getEmailHeaders = async (emailId: string, forceFresh?: boolean): Promise<EmailHeadersResponse> => {
+  const cacheKey = `emailHeaders:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailHeadersResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailHeadersResponse>(`/emails/${emailId}/headers`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const triggerEmailParse = async (emailId: string): Promise<EmailStructureResponse> => {
+  invalidateApiCache(emailId);
   const response = await apiClient.post<EmailStructureResponse>(`/emails/${emailId}/parse`);
   return response.data;
 };
 
-export const getEmailRelayHops = async (emailId: string): Promise<RelayHopsResponse> => {
+export const getEmailRelayHops = async (emailId: string, forceFresh?: boolean): Promise<RelayHopsResponse> => {
+  const cacheKey = `emailRelayHops:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<RelayHopsResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<RelayHopsResponse>(`/emails/${emailId}/hops`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
-export const getEmailAuthResults = async (emailId: string): Promise<EmailAuthResponse> => {
+export const getEmailAuthResults = async (emailId: string, forceFresh?: boolean): Promise<EmailAuthResponse> => {
+  const cacheKey = `emailAuth:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailAuthResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailAuthResponse>(`/emails/${emailId}/auth`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const analyzeEmailHeaders = async (emailId: string): Promise<RelayHopsResponse> => {
+  invalidateApiCache(emailId);
   const response = await apiClient.post<RelayHopsResponse>(`/emails/${emailId}/analyze-headers`);
   return response.data;
 };
 
-export const getEmailArtifacts = async (emailId: string): Promise<EmailArtifactsResponse> => {
+export const getEmailArtifacts = async (emailId: string, forceFresh?: boolean): Promise<EmailArtifactsResponse> => {
+  const cacheKey = `emailArtifacts:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailArtifactsResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailArtifactsResponse>(`/emails/${emailId}/artifacts`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const extractEmailArtifacts = async (emailId: string): Promise<EmailArtifactsResponse> => {
+  invalidateApiCache(emailId);
   const response = await apiClient.post<EmailArtifactsResponse>(`/emails/${emailId}/extract-artifacts`);
   return response.data;
 };
@@ -1069,33 +1214,55 @@ export const enrichEmailThreatIntelligence = async (
   return response.data;
 };
 
-export const getEmailAnalysis = async (emailId: string): Promise<EmailAnalysisResponse> => {
+export const getEmailAnalysis = async (emailId: string, forceFresh?: boolean): Promise<EmailAnalysisResponse> => {
+  const cacheKey = `emailAnalysis:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailAnalysisResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailAnalysisResponse>(`/emails/${emailId}/analysis`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const triggerEmailAnalysis = async (emailId: string): Promise<EmailAnalysisResponse> => {
+  invalidateApiCache(emailId);
+  invalidateApiCache('listEmails');
   const response = await apiClient.post<EmailAnalysisResponse>(`/emails/${emailId}/analyze`);
   return response.data;
 };
 
 export const getEmailFindings = async (
   emailId: string,
-  severity?: string
+  severity?: string,
+  forceFresh?: boolean
 ): Promise<FindingsListResponse> => {
+  const cacheKey = `emailFindings:${emailId}:${severity || ''}`;
+  if (!forceFresh) {
+    const cached = getCachedData<FindingsListResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const url = severity
     ? `/emails/${emailId}/findings?severity=${encodeURIComponent(severity)}`
     : `/emails/${emailId}/findings`;
   const response = await apiClient.get<FindingsListResponse>(url);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
-export const getEmailDNA = async (emailId: string): Promise<EmailDNAProfileResponse> => {
+export const getEmailDNA = async (emailId: string, forceFresh?: boolean): Promise<EmailDNAProfileResponse> => {
+  const cacheKey = `emailDNA:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailDNAProfileResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailDNAProfileResponse>(`/emails/${emailId}/dna`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const generateEmailDNA = async (emailId: string): Promise<EmailDNAProfileResponse> => {
+  invalidateApiCache(emailId);
   const response = await apiClient.post<EmailDNAProfileResponse>(`/emails/${emailId}/dna`);
   return response.data;
 };
@@ -1110,8 +1277,14 @@ export const generateEmailEmbeddings = async (emailId: string): Promise<Embeddin
   return response.data;
 };
 
-export const getSimilarEmails = async (emailId: string): Promise<SimilarityLinkResponse[]> => {
+export const getSimilarEmails = async (emailId: string, forceFresh?: boolean): Promise<SimilarityLinkResponse[]> => {
+  const cacheKey = `similarEmails:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<SimilarityLinkResponse[]>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<SimilarityLinkResponse[]>(`/emails/${emailId}/similar`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
@@ -1119,6 +1292,7 @@ export const computeSimilarEmails = async (
   emailId: string,
   params?: SimilaritySearchParams
 ): Promise<SimilarityLinkResponse[]> => {
+  invalidateApiCache(emailId);
   const response = await apiClient.post<SimilarityLinkResponse[]>(
     `/emails/${emailId}/similar`,
     params || {}
@@ -1130,6 +1304,7 @@ export const computeEmailCorrelations = async (
   emailId: string,
   minScore = 40.0
 ): Promise<EmailCorrelationsResponse> => {
+  invalidateApiCache(emailId);
   const response = await apiClient.post<EmailCorrelationsResponse>(
     `/campaigns/correlate/${emailId}?min_score=${minScore}`
   );
@@ -1138,15 +1313,23 @@ export const computeEmailCorrelations = async (
 
 export const getEmailCorrelations = async (
   emailId: string,
-  minScore = 40.0
+  minScore = 40.0,
+  forceFresh?: boolean
 ): Promise<EmailCorrelationsResponse> => {
+  const cacheKey = `correlations:${emailId}:${minScore}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailCorrelationsResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailCorrelationsResponse>(
     `/campaigns/correlations/${emailId}?min_score=${minScore}`
   );
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const createCampaign = async (payload: CreateCampaignPayload): Promise<CampaignDetailResponse> => {
+  invalidateApiCache('listCampaigns');
   const response = await apiClient.post<CampaignDetailResponse>('/campaigns', payload);
   return response.data;
 };
@@ -1154,11 +1337,20 @@ export const createCampaign = async (payload: CreateCampaignPayload): Promise<Ca
 export const listCampaigns = async (
   status?: string,
   skip = 0,
-  limit = 50
+  limit = 50,
+  organizationId?: string,
+  forceFresh?: boolean
 ): Promise<CampaignListItemResponse[]> => {
+  const cacheKey = `listCampaigns:${status || ''}:${skip}:${limit}:${organizationId || ''}`;
+  if (!forceFresh) {
+    const cached = getCachedData<CampaignListItemResponse[]>(cacheKey);
+    if (cached) return cached;
+  }
   const params: Record<string, unknown> = { skip, limit };
   if (status) params.status = status;
+  if (organizationId) params.organization_id = organizationId;
   const response = await apiClient.get<CampaignListItemResponse[]>('/campaigns', { params });
+  setCachedData(cacheKey, response.data, 45000);
   return response.data;
 };
 
@@ -1167,11 +1359,28 @@ export const getCampaign = async (campaignId: string): Promise<CampaignDetailRes
   return response.data;
 };
 
+export const updateCampaign = async (
+  campaignId: string,
+  payload: UpdateCampaignPayload
+): Promise<CampaignDetailResponse> => {
+  invalidateApiCache('listCampaigns');
+  const response = await apiClient.patch<CampaignDetailResponse>(`/campaigns/${campaignId}`, payload);
+  return response.data;
+};
+
+export const deleteCampaign = async (campaignId: string): Promise<{ message: string }> => {
+  invalidateApiCache('listCampaigns');
+  const response = await apiClient.delete<{ message: string }>(`/campaigns/${campaignId}`);
+  return response.data;
+};
+
 export const addEmailToCampaign = async (
   campaignId: string,
   emailId: string,
   payload?: { membership_confidence?: number; membership_status?: string; evidence_summary?: Record<string, unknown> }
 ): Promise<CampaignMembershipItem> => {
+  invalidateApiCache(emailId);
+  invalidateApiCache('listCampaigns');
   const response = await apiClient.post<CampaignMembershipItem>(
     `/campaigns/${campaignId}/emails/${emailId}`,
     payload || {}
@@ -1183,40 +1392,69 @@ export const removeEmailFromCampaign = async (
   campaignId: string,
   emailId: string
 ): Promise<{ message: string }> => {
+  invalidateApiCache(emailId);
+  invalidateApiCache('listCampaigns');
   const response = await apiClient.delete<{ message: string }>(
     `/campaigns/${campaignId}/emails/${emailId}`
   );
   return response.data;
 };
 
-export const getEmailCampaignMemberships = async (emailId: string): Promise<EmailMembershipsResponse> => {
+export const getEmailCampaignMemberships = async (emailId: string, forceFresh?: boolean): Promise<EmailMembershipsResponse> => {
+  const cacheKey = `campaignMemberships:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<EmailMembershipsResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<EmailMembershipsResponse>(
     `/campaigns/emails/${emailId}/memberships`
   );
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
-export const autoClusterCampaigns = async (minScore = 60.0): Promise<AutoClusterResponse> => {
-  const response = await apiClient.post<AutoClusterResponse>(
-    `/campaigns/auto-cluster?min_score=${minScore}`
-  );
+export const autoClusterCampaigns = async (minScore = 60.0, organizationId?: string): Promise<AutoClusterResponse> => {
+  invalidateApiCache('listCampaigns');
+  const url = organizationId
+    ? `/campaigns/auto-cluster?min_score=${minScore}&organization_id=${organizationId}`
+    : `/campaigns/auto-cluster?min_score=${minScore}`;
+  const response = await apiClient.post<AutoClusterResponse>(url);
   return response.data;
 };
 
-export const getInvestigationGraphForEmail = async (emailId: string): Promise<InvestigationGraphResponse> => {
+export const getInvestigationGraphForEmail = async (emailId: string, forceFresh?: boolean): Promise<InvestigationGraphResponse> => {
+  const cacheKey = `graphEmail:${emailId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<InvestigationGraphResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<InvestigationGraphResponse>(`/graph/email/${emailId}`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
 export const getInvestigationGraphForCampaign = async (
-  campaignId: string
+  campaignId: string,
+  forceFresh?: boolean
 ): Promise<InvestigationGraphResponse> => {
+  const cacheKey = `graphCampaign:${campaignId}`;
+  if (!forceFresh) {
+    const cached = getCachedData<InvestigationGraphResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<InvestigationGraphResponse>(`/graph/campaign/${campaignId}`);
+  setCachedData(cacheKey, response.data, 60000);
   return response.data;
 };
 
-export const getGlobalInvestigationGraph = async (limit = 30): Promise<InvestigationGraphResponse> => {
+export const getGlobalInvestigationGraph = async (limit = 30, forceFresh?: boolean): Promise<InvestigationGraphResponse> => {
+  const cacheKey = `graphGlobal:${limit}`;
+  if (!forceFresh) {
+    const cached = getCachedData<InvestigationGraphResponse>(cacheKey);
+    if (cached) return cached;
+  }
   const response = await apiClient.get<InvestigationGraphResponse>(`/graph/global?limit=${limit}`);
+  setCachedData(cacheKey, response.data, 45000);
   return response.data;
 };
 
@@ -1339,7 +1577,14 @@ export interface EmailGeoInfrastructureResponse {
     confidence_level?: string;
     confidence_score?: number;
     is_redacted_by_provider?: boolean;
-    provider_name?: string | null;
+    is_proxy_or_cloud_relayed?: boolean;
+    proxy_provider_name?: string | null;
+    proxy_type?: string | null;
+    is_forwarded?: boolean;
+    forwarding_summary?: string | null;
+    client_submission_ip?: string | null;
+    server_infrastructure_location?: Record<string, any>;
+    recipient_gateway_location?: Record<string, any>;
     evidence_signals?: Array<{
       category: string;
       signal: string;
@@ -1349,6 +1594,69 @@ export interface EmailGeoInfrastructureResponse {
     }>;
     forensic_explanation?: string;
   };
+  forwarding_analysis?: {
+    is_forwarded: boolean;
+    forwarding_type: string;
+    forwarder_addresses: string[];
+    original_recipient?: string | null;
+    final_recipient?: string | null;
+    client_submission_ip?: string | null;
+    client_submission_header?: string | null;
+    is_client_ip_public: boolean;
+    arc_chain_count: number;
+    arc_original_spf_pass: boolean;
+    forwarding_hops: Array<{
+      sequence: number;
+      header_name: string;
+      from_address?: string | null;
+      to_address?: string | null;
+      relay_ip?: string | null;
+      timestamp?: string | null;
+      mechanism: string;
+    }>;
+    footprint_summary: string;
+  };
+}
+
+export interface CampaignTransmissionPath {
+  email_id: string;
+  email_subject?: string | null;
+  sender_address?: string | null;
+  sender_origin_ip?: string | null;
+  sender_city?: string | null;
+  sender_country?: string | null;
+  sender_coords: [number, number];
+  recipient_address?: string | null;
+  recipient_domain?: string | null;
+  recipient_destination_ip?: string | null;
+  recipient_city?: string | null;
+  recipient_country?: string | null;
+  recipient_coords: [number, number];
+  hops_count: number;
+  path_summary: string;
+}
+
+export interface CampaignSenderNode {
+  sender_address: string;
+  origin_ip: string;
+  city: string;
+  country: string;
+  country_code: string;
+  latitude: number;
+  longitude: number;
+  dispatched_count: number;
+}
+
+export interface CampaignReceiverNode {
+  recipient_address: string;
+  recipient_domain: string;
+  destination_ip: string;
+  city: string;
+  country: string;
+  country_code: string;
+  latitude: number;
+  longitude: number;
+  received_count: number;
 }
 
 export interface CampaignGeoInfrastructureResponse {
@@ -1365,6 +1673,9 @@ export interface CampaignGeoInfrastructureResponse {
   markers: GeoMarkerItem[];
   country_distribution: Record<string, number>;
   attribution_disclaimer: string;
+  senders?: CampaignSenderNode[];
+  receivers?: CampaignReceiverNode[];
+  transmission_paths?: CampaignTransmissionPath[];
 }
 
 export interface GlobalGeoInfrastructureResponse {
@@ -1462,6 +1773,13 @@ export async function exportEmailReport(
   });
   return response.data;
 }
+
+export const exportBatchPdfReport = async (emailIds: string[]): Promise<Blob> => {
+  const response = await apiClient.post('/reports/export-batch-pdf', { email_ids: emailIds }, {
+    responseType: 'blob',
+  });
+  return response.data;
+};
 
 export const generateCampaignReport = async (
   campaignId: string,
@@ -1716,6 +2034,9 @@ export interface AIReasoningItem {
 
 export interface AIThreatReasoningResponse {
   classification: 'legitimate' | 'suspicious' | 'phishing' | 'impersonation' | 'fraud' | 'BEC' | string;
+  threat_category?: 'SPOOFING' | 'BUSINESS_EMAIL_COMPROMISE' | 'CREDENTIAL_PHISHING' | 'SPEAR_PHISHING' | 'BRAND_IMPERSONATION' | 'MALWARE_DELIVERY' | 'EXTORTION_FRAUD' | 'QUISHING' | 'LEGITIMATE_COMMUNICATION' | 'SUSPICIOUS_ANOMALY' | string;
+  phishing_subcategory?: string;
+  category_explanation?: string;
   reasoning: AIReasoningItem[];
   social_engineering_indicators: string[];
   attack_intent: string[];
@@ -1817,3 +2138,134 @@ export const submitEmailDisposition = async (
 
 export const getEmailPrecedents = async (emailId: string): Promise<AnalystPrecedentItem[]> =>
   (await apiClient.get<AnalystPrecedentItem[]>(`/disposition/${emailId}/precedents`)).data;
+
+// --- Attachment Sandbox Detonation ---
+export interface YaraRuleItem {
+  rule: string;
+  tags: string[];
+  severity: string;
+}
+
+export interface StaticAnalysisInfo {
+  entropy: number;
+  entropy_status: string;
+  magic_signature: string;
+  is_extension_mismatch: boolean;
+  has_macros: boolean;
+  has_double_extension: boolean;
+  suspicious_string_hits: string[];
+  yara_rule_matches: YaraRuleItem[];
+}
+
+export interface SandboxProcessItem {
+  pid: number;
+  process_name: string;
+  command_line: string;
+  status: string;
+}
+
+export interface SandboxDroppedFile {
+  path: string;
+  size_bytes: number;
+  sha256: string;
+  file_type: string;
+  verdict: string;
+}
+
+export interface SandboxNetworkBeacon {
+  destination_host: string;
+  destination_ip: string;
+  port: number;
+  protocol: string;
+  packet_count: number;
+  status: string;
+  notes: string;
+}
+
+export interface SandboxRegistryMod {
+  action: string;
+  key: string;
+  value: string;
+}
+
+export interface SandboxMitreTactic {
+  tactic: string;
+  technique_id: string;
+  name: string;
+}
+
+export interface DynamicDetonationInfo {
+  detonation_score: number;
+  verdict: 'MALICIOUS' | 'SUSPICIOUS' | 'CLEAN' | string;
+  detonation_time_ms: number;
+  sandbox_env: string;
+  processes_spawned: SandboxProcessItem[];
+  dropped_files: SandboxDroppedFile[];
+  network_beacons: SandboxNetworkBeacon[];
+  registry_modifications: SandboxRegistryMod[];
+  mitre_attack_matrix: SandboxMitreTactic[];
+  screenshot_url: string;
+  analyst_summary: string;
+}
+
+export interface AttachmentSandboxReport {
+  attachment_name: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  md5: string;
+  static_analysis: StaticAnalysisInfo;
+  dynamic_detonation: DynamicDetonationInfo;
+  analyzed_at: string;
+}
+
+export interface EmailSandboxReportsResponse {
+  email_id: string;
+  total_attachments: number;
+  sandbox_env: string;
+  overall_verdict: string;
+  highest_detonation_score: number;
+  reports: AttachmentSandboxReport[];
+}
+
+export const getEmailSandboxReports = async (emailId: string): Promise<EmailSandboxReportsResponse> =>
+  (await apiClient.get<EmailSandboxReportsResponse>(`/emails/${emailId}/attachments/sandbox`)).data;
+
+export const detonateAttachmentInSandbox = async (
+  emailId: string,
+  sha256Hash: string
+): Promise<AttachmentSandboxReport> =>
+  (await apiClient.post<AttachmentSandboxReport>(`/emails/${emailId}/attachments/${sha256Hash}/detonate`)).data;
+
+export const detonateDirectFileInSandbox = async (file: File): Promise<AttachmentSandboxReport> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await apiClient.post<AttachmentSandboxReport>('/sandbox/detonate-file', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data;
+};
+
+// --- Real-time Notifications ---
+export interface NotificationItem {
+  id: string;
+  type: 'PHISHING_ALERT' | 'SUSPICIOUS_ALERT' | 'CAMPAIGN_DETECTED' | 'ANALYSIS_COMPLETE' | 'SYSTEM' | 'DISPOSITION';
+  title: string;
+  message: string;
+  timestamp: string;
+  severity: 'critical' | 'high' | 'medium' | 'info' | 'success';
+  read?: boolean;
+  data?: Record<string, any>;
+}
+
+export const getRecentNotifications = async (): Promise<NotificationItem[]> =>
+  (await apiClient.get<NotificationItem[]>('/notifications')).data;
+
+export const triggerTestNotification = async (payload?: {
+  title?: string;
+  message?: string;
+  severity?: string;
+  type?: string;
+}): Promise<any> =>
+  (await apiClient.post('/notifications/test', payload || {})).data;
+

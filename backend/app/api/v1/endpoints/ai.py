@@ -21,6 +21,9 @@ class ReasoningItem(BaseModel):
 
 class ThreatReasoningResponse(BaseModel):
     classification: str
+    threat_category: Optional[str] = "SUSPICIOUS_ANOMALY"
+    phishing_subcategory: Optional[str] = None
+    category_explanation: Optional[str] = None
     reasoning: List[ReasoningItem]
     social_engineering_indicators: List[str] = Field(default_factory=list)
     attack_intent: List[str] = Field(default_factory=list)

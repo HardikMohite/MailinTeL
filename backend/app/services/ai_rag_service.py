@@ -403,8 +403,72 @@ class ForensicRAGService:
         else:
             recommended_actions.append("Maintain baseline telemetry monitoring; no immediate escalation required")
 
+        # Determine threat_category and phishing_subcategory with forensic taxonomy
+        threat_category = "SUSPICIOUS_ANOMALY"
+        phishing_subcategory = "UNCLASSIFIED_SUSPICIOUS"
+        category_explanation = "The email exhibits atypical transmission or envelope characteristics requiring verification."
+
+        subject_lower = str(ctx.get("subject", "")).lower()
+        body_lower = str(ctx.get("body_snippet", "")).lower()
+        display_name_lower = str(ctx.get("sender_display_name", "")).lower()
+
+        is_spf_fail = auth.get("spf_status") in ("FAIL", "SOFTFAIL")
+        is_dmarc_fail = auth.get("dmarc_status") == "FAIL"
+        is_dkim_fail = auth.get("dkim_status") == "FAIL"
+        has_auth_failure = is_spf_fail or is_dmarc_fail or is_dkim_fail
+
+        has_dangerous_attachments = any(a.get("is_dangerous") for a in ctx.get("attachments", []))
+
+        # Check BEC (Business Email Compromise)
+        bec_keywords = ["wire", "invoice", "payment", "bank transfer", "payroll", "direct deposit", "gift card", "w-2", "urgent transfer", "ceo", "cfo", "executive"]
+        is_bec_lure = any(w in subject_lower or w in body_lower for w in bec_keywords)
+
+        # Check Credential Harvesting
+        cred_keywords = ["password", "verify account", "login", "reset", "security alert", "suspension", "expire", "action required", "authenticate", "mfa", "2fa", "microsoft 365", "office 365", "google workspace"]
+        is_cred_lure = any(w in subject_lower or w in body_lower for w in cred_keywords)
+
+        # Check Brand Impersonation
+        brand_keywords = ["dhl", "fedex", "ups", "amazon", "paypal", "netflix", "apple", "microsoft", "chase", "bank of america", "wells fargo", "docusign"]
+        is_brand_lure = any(w in display_name_lower or w in subject_lower for w in brand_keywords)
+
+        if threat_score < 40 and not has_auth_failure and not has_reply_mismatch_finding and not has_dangerous_attachments:
+            threat_category = "LEGITIMATE_COMMUNICATION"
+            phishing_subcategory = "BENIGN_CONVERSATION"
+            category_explanation = "The email passed standard cryptographic authentication and originates from authorized infrastructure."
+        elif has_dangerous_attachments or any("malware" in f.get("title", "").lower() for f in findings):
+            threat_category = "MALWARE_DELIVERY"
+            phishing_subcategory = "WEAPONIZED_ATTACHMENT"
+            category_explanation = "Email delivers potentially hazardous file attachments designed for host execution or payload download."
+        elif (has_reply_mismatch_finding or "impersonation" in classification or classification == "BEC") and is_bec_lure:
+            threat_category = "BUSINESS_EMAIL_COMPROMISE"
+            phishing_subcategory = "VIP_EXECUTIVE_IMPERSONATION" if ("ceo" in subject_lower or "executive" in subject_lower) else "VENDOR_INVOICE_FRAUD"
+            category_explanation = "Business Email Compromise (BEC) attack impersonating trusted parties to divert funds or sensitive financial records."
+        elif has_auth_failure and ("spoof" in classification or any("spoof" in f.get("title", "").lower() for f in findings) or is_dmarc_fail):
+            threat_category = "SPOOFING"
+            phishing_subcategory = "DOMAIN_SPOOFING_FAIL" if is_dmarc_fail else "DISPLAY_NAME_DECEPTION"
+            category_explanation = "Domain or header spoofing attack where the sender identity fails authentication policy and originates from an unauthorized relay."
+        elif has_reply_mismatch_finding:
+            threat_category = "SPOOFING"
+            phishing_subcategory = "DISPLAY_NAME_DECEPTION"
+            category_explanation = "Reply-To address mismatch indicating identity spoofing or deceptive forwarding away from the sender envelope."
+        elif is_cred_lure or any("credential" in f.get("title", "").lower() for f in findings):
+            threat_category = "CREDENTIAL_PHISHING"
+            phishing_subcategory = "ACCOUNT_TAKEOVER_LURE"
+            category_explanation = "Credential phishing attack attempting to deceive users into disclosing corporate credentials or session tokens via fraudulent portals."
+        elif is_brand_lure:
+            threat_category = "BRAND_IMPERSONATION"
+            phishing_subcategory = "LOOKALIKE_TYPOSQUATTING"
+            category_explanation = "Brand impersonation attack mimicking reputable consumer or financial entities to manipulate user trust."
+        elif threat_score >= 70:
+            threat_category = "CREDENTIAL_PHISHING"
+            phishing_subcategory = "ACCOUNT_TAKEOVER_LURE"
+            category_explanation = "High-risk phishing attack designed to harvest sensitive user information or induce malicious interactions."
+
         return {
             "classification": classification,
+            "threat_category": threat_category,
+            "phishing_subcategory": phishing_subcategory,
+            "category_explanation": category_explanation,
             "reasoning": reasoning,
             "social_engineering_indicators": social_indicators or ["No overt psychological manipulation detected"],
             "attack_intent": attack_intent or ["Standard Communications / Administrative Delivery"],
@@ -442,21 +506,27 @@ class ForensicRAGService:
             "5. DO NOT override deterministic findings or threat scores.\n"
             "6. Every reasoning item MUST provide concrete, verifiable forensic proof citing specific fields from the context "
             "(e.g. hop number, IP, domain, URL, hash, or header mismatch).\n"
-            "7. COLLABORATIVE PLATFORMS: Legitimate cloud service notifications (such as Google Drive, Google Docs, GitHub, Dropbox, Slack) "
+            "7. THREAT CATEGORIZATION TAXONOMY:\n"
+            "   Accurately assign threat_category to one of: 'SPOOFING', 'BUSINESS_EMAIL_COMPROMISE', 'CREDENTIAL_PHISHING', 'SPEAR_PHISHING', 'BRAND_IMPERSONATION', 'MALWARE_DELIVERY', 'EXTORTION_FRAUD', 'QUISHING', 'LEGITIMATE_COMMUNICATION', 'SUSPICIOUS_ANOMALY'.\n"
+            "   Assign phishing_subcategory to one of: 'DOMAIN_SPOOFING_FAIL', 'DISPLAY_NAME_DECEPTION', 'LOOKALIKE_TYPOSQUATTING', 'VIP_EXECUTIVE_IMPERSONATION', 'VENDOR_INVOICE_FRAUD', 'ACCOUNT_TAKEOVER_LURE', 'DOCUMENT_SHARING_LURE', 'WEAPONIZED_ATTACHMENT', 'BENIGN_CONVERSATION'.\n"
+            "8. COLLABORATIVE PLATFORMS: Legitimate cloud service notifications (such as Google Drive, Google Docs, GitHub, Dropbox, Slack) "
             "intentionally set Reply-To to the collaborative user while sending from noreply addresses. If SPF, DKIM, or DMARC pass and the sending domain is trusted, "
             "do NOT treat this standard invitation mechanism as phishing or impersonation.\n"
-            "8. ATTACHMENT EVASION: Non-executable productivity files (.docx, .odt, .pdf, .xlsx) without active macros or malicious payloads are routine office files "
+            "9. ATTACHMENT EVASION: Non-executable productivity files (.docx, .odt, .pdf, .xlsx) without active macros or malicious payloads are routine office files "
             "and must NOT be characterized as malware evasion or double-extension attacks.\n\n"
             "You must return ONLY a valid JSON object with this EXACT structure:\n"
             "{\n"
             '  "classification": "legitimate" | "suspicious" | "phishing" | "impersonation" | "fraud" | "BEC",\n'
+            '  "threat_category": "SPOOFING" | "BUSINESS_EMAIL_COMPROMISE" | "CREDENTIAL_PHISHING" | "SPEAR_PHISHING" | "BRAND_IMPERSONATION" | "MALWARE_DELIVERY" | "EXTORTION_FRAUD" | "QUISHING" | "LEGITIMATE_COMMUNICATION" | "SUSPICIOUS_ANOMALY",\n'
+            '  "phishing_subcategory": "DOMAIN_SPOOFING_FAIL" | "DISPLAY_NAME_DECEPTION" | "LOOKALIKE_TYPOSQUATTING" | "VIP_EXECUTIVE_IMPERSONATION" | "VENDOR_INVOICE_FRAUD" | "ACCOUNT_TAKEOVER_LURE" | "DOCUMENT_SHARING_LURE" | "WEAPONIZED_ATTACHMENT" | "BENIGN_CONVERSATION",\n'
+            '  "category_explanation": "1-sentence explanation of why this specific category and lure mechanism applies.",\n'
             '  "reasoning": [\n'
             '    {\n'
             '      "finding": "WHAT occurred (short title)",\n'
             '      "evidence": "WHY and concrete forensic EVIDENCE quoted from context",\n'
             '      "confidence": 0.0 to 1.0\n'
-            "    }\n"
-            "  ],\n"
+            '    }\n'
+            '  ],\n'
             '  "social_engineering_indicators": ["..."],\n'
             '  "attack_intent": ["..."],\n'
             '  "recommended_actions": ["..."],\n'
@@ -486,6 +556,8 @@ class ForensicRAGService:
                     valid_classes = {"legitimate", "suspicious", "phishing", "impersonation", "fraud", "BEC"}
                     if parsed["classification"] not in valid_classes:
                         parsed["classification"] = "suspicious" if ctx.get("threat_score", 0) >= 40 else "legitimate"
+                    if "threat_category" not in parsed:
+                        parsed["threat_category"] = "BUSINESS_EMAIL_COMPROMISE" if parsed["classification"] == "BEC" else ("SPOOFING" if parsed["classification"] == "impersonation" else "CREDENTIAL_PHISHING")
                     await default_ai_memory_service.set_cached_explanation(str(email_id), parsed)
                     return parsed
             except Exception as e:

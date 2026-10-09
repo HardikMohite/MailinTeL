@@ -228,6 +228,45 @@ async def export_email_report(
         )
 
 
+class BatchPdfExportRequest(BaseModel):
+    email_ids: List[uuid.UUID]
+
+
+@router.post(
+    "/export-batch-pdf",
+    summary="Export Consolidated Batch Forensic PDF",
+    description="Export a consolidated multi-case tamper-evident PDF dossier for all selected email cases.",
+)
+async def export_batch_pdf_report(
+    payload: BatchPdfExportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
+):
+    """Generates a single consolidated PDF combining all requested email cases."""
+    if not payload.email_ids:
+        raise HTTPException(status_code=400, detail="No email IDs provided for batch export.")
+
+    reports_data: List[Dict[str, Any]] = []
+    for eid in payload.email_ids:
+        try:
+            await get_authorized_email(eid, current_user, db)
+            rdata = await ReportService.build_email_report_data(email_id=eid, db=db)
+            reports_data.append(rdata)
+        except Exception as e:
+            logger.warning(f"Skipping email {eid} in batch PDF export: {e}")
+
+    if not reports_data:
+        raise HTTPException(status_code=404, detail="No valid authorized email reports found to compile.")
+
+    content = ReportService.render_multi_email_pdf_report(reports_data)
+    filename = f"MailIntel_Consolidated_Forensic_Report_{len(reports_data)}_Cases.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post(
     "/campaign/{campaign_id}",
     response_model=GenerateReportResponse,
@@ -337,32 +376,26 @@ async def list_reports(
             if now - ts < _REPORTS_CACHE_TTL:
                 return cached_res
 
-        try:
-            r_data = await redis_manager.get_json(f"cache:{cache_key}")
-            if r_data and isinstance(r_data, dict) and "reports" in r_data:
-                resp = ReportListResponse(**r_data)
-                _REPORTS_CACHE[cache_key] = (now, resp)
-                return resp
-        except Exception:
-            pass
-
-    org_owned_emails = (
-        select(Email.id)
-        .join(EmailSource, EmailSource.id == Email.source_id)
-        .where(EmailSource.organization_id == requested_org_id)
-    )
-    org_owned_campaigns = select(Campaign.id).where(Campaign.organization_id == requested_org_id)
-
-    stmt = (
-        select(Report)
-        .where(
-            or_(
-                and_(Report.email_id.isnot(None), Report.email_id.in_(org_owned_emails)),
-                and_(Report.campaign_id.isnot(None), Report.campaign_id.in_(org_owned_campaigns)),
-            )
+    if current_user.role_code in CROSS_ORG_ROLES and requested_org_id is None:
+        stmt = select(Report).order_by(Report.generated_at.desc())
+    else:
+        org_owned_emails = (
+            select(Email.id)
+            .join(EmailSource, EmailSource.id == Email.source_id)
+            .where(EmailSource.organization_id == requested_org_id)
         )
-        .order_by(Report.generated_at.desc())
-    )
+        org_owned_campaigns = select(Campaign.id).where(Campaign.organization_id == requested_org_id)
+
+        stmt = (
+            select(Report)
+            .where(
+                or_(
+                    and_(Report.email_id.isnot(None), Report.email_id.in_(org_owned_emails)),
+                    and_(Report.campaign_id.isnot(None), Report.campaign_id.in_(org_owned_campaigns)),
+                )
+            )
+            .order_by(Report.generated_at.desc())
+        )
     if email_id:
         stmt = stmt.where(Report.email_id == email_id)
     if campaign_id:

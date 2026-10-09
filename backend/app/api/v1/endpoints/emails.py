@@ -41,6 +41,8 @@ router = APIRouter()
 # High-speed in-memory cache for email metadata endpoints
 _EMAIL_CACHE: Dict[str, Tuple[float, Any]] = {}
 _EMAIL_CACHE_TTL = 1800.0  # 30 minutes
+_AUTH_CACHE: Dict[Tuple[str, str], Tuple[float, Any]] = {}
+_AUTH_CACHE_TTL = 60.0  # 60 seconds
 
 
 async def invalidate_email_metadata_cache(email_id: uuid.UUID) -> None:
@@ -50,6 +52,9 @@ async def invalidate_email_metadata_cache(email_id: uuid.UUID) -> None:
         keys_to_del = [k for k in _EMAIL_CACHE.keys() if prefix in k or k.startswith("list:")]
         for k in keys_to_del:
             _EMAIL_CACHE.pop(k, None)
+        auth_keys_to_del = [k for k in _AUTH_CACHE.keys() if k[0] == prefix]
+        for k in auth_keys_to_del:
+            _AUTH_CACHE.pop(k, None)
         await redis_manager.delete(f"cache:email:details:{prefix}")
         await redis_manager.delete(f"cache:email:headers:{prefix}")
         await redis_manager.delete(f"cache:email:hops:{prefix}")
@@ -70,6 +75,13 @@ async def _get_authorized_email_and_evidence(
     for both "does not exist" and "belongs to someone else" so callers can't use
     this endpoint to enumerate which email IDs exist in other tenants.
     """
+    auth_key = (str(email_id), str(current_user.id))
+    now = time.time()
+    if auth_key in _AUTH_CACHE:
+        ts, cached_val = _AUTH_CACHE[auth_key]
+        if now - ts < _AUTH_CACHE_TTL:
+            return cached_val
+
     stmt = (
         select(Email, EvidenceObject, EmailSource)
         .outerjoin(EvidenceObject, Email.id == EvidenceObject.email_id)
@@ -91,14 +103,23 @@ async def _get_authorized_email_and_evidence(
     if source_org_id is not None and current_user.role_code not in CROSS_ORG_ROLES and source_org_id != current_user.organization_id:
         raise not_found
 
-    # SCOPING: plain USER accounts only reach emails they personally
-    # uploaded; analyst/admin roles (ANALYST_ROLES) keep full org visibility.
+    is_owner = source_obj is not None and source_obj.user_id == current_user.id
+    # SCOPING: plain USER accounts only reach emails they personally uploaded
     if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
-        source_user_id = source_obj.user_id if source_obj else None
-        if source_user_id is None or source_user_id != current_user.id:
+        if not is_owner:
             raise not_found
 
-    return email_obj, evidence_obj
+    # DATA PRIVACY ENFORCEMENT:
+    # Real / benign personal communications (NORMAL, SAFE, BENIGN) are strictly confidential
+    # to the employee uploader. Org Managers, System Admins, and Cyber Cell Investigators
+    # are restricted to phishing / threat data and cannot inspect benign communications.
+    is_benign = email_obj.qualification_status in ["NORMAL", "SAFE", "BENIGN"]
+    if not is_owner and is_benign:
+        raise not_found
+
+    res = (email_obj, evidence_obj)
+    _AUTH_CACHE[auth_key] = (now, res)
+    return res
 
 # Max allowed upload size: 25 MB
 MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024
@@ -149,6 +170,9 @@ class EmailDetailResponse(BaseModel):
     evidence_id: Optional[str] = None
     organization_id: Optional[str] = None
     organization_name: Optional[str] = None
+    threat_risk_score: Optional[float] = None
+    evidence_confidence_score: Optional[float] = None
+    threat_classification: Optional[str] = None
 
 
 class EmailListResponse(BaseModel):
@@ -437,7 +461,8 @@ async def upload_eml_file(
 
     try:
         if storage.client is not None:
-            storage.upload_evidence_object(
+            await asyncio.to_thread(
+                storage.upload_evidence_object,
                 bucket_name=settings.evidence_bucket,
                 object_key=object_key,
                 data=content,
@@ -634,6 +659,17 @@ async def get_email_structure(
     elif not parsed:
         parsed = ParsedEmailStructure()
 
+    plain_text_body = parsed.plain_text_body
+    html_body = parsed.html_body
+    is_owner = False
+    if email_obj.source_id:
+        source_user_stmt = select(EmailSource.user_id).where(EmailSource.id == email_obj.source_id)
+        u_res = await db.execute(source_user_stmt)
+        is_owner = (u_res.scalar_one_or_none() == current_user.id)
+    if email_obj.qualification_status in ["NORMAL", "SAFE", "BENIGN"] and not is_owner:
+        plain_text_body = "[COMMUNICATION PRIVACY PROTECTED: Clean message. Personal communications are redacted under Zero-Knowledge Privacy Policy.]"
+        html_body = "<div style='padding:20px; color:#94a3b8; font-family:sans-serif;'><strong>COMMUNICATION PRIVACY PROTECTED</strong><br/>This message is classified as BENIGN / CLEAN. Personal communication payload is redacted to maintain employee privacy.</div>"
+
     return EmailStructureResponse(
         email_id=str(email_obj.id),
         subject=parsed.subject or email_obj.subject,
@@ -646,8 +682,8 @@ async def get_email_structure(
         reply_to=parsed.reply_to,
         reply_to_display_name=parsed.reply_to_display_name,
         recipients=recipients_list if recipients_list else [RecipientSchema(recipient_type=r.recipient_type, address=r.address, display_name=r.display_name) for r in parsed.recipients],
-        plain_text_body=parsed.plain_text_body,
-        html_body=parsed.html_body,
+        plain_text_body=plain_text_body,
+        html_body=html_body,
         has_attachments=parsed.has_attachments,
         attachment_count=parsed.attachment_count,
         total_mime_parts=parsed.total_mime_parts,
@@ -1109,9 +1145,10 @@ async def get_email_details(
         pass
 
     stmt = (
-        select(Email, EmailSource, EvidenceObject)
+        select(Email, EmailSource, EvidenceObject, EmailAnalysis)
         .outerjoin(EmailSource, Email.source_id == EmailSource.id)
         .outerjoin(EvidenceObject, Email.id == EvidenceObject.email_id)
+        .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
         .where(Email.id == email_id)
     )
     result = await db.execute(stmt)
@@ -1124,10 +1161,27 @@ async def get_email_details(
     if not row:
         raise not_found
 
-    email, source, evidence = row
+    email, source, evidence, analysis = row
     source_org_id = source.organization_id if source else None
     if source_org_id is not None and current_user.role_code not in CROSS_ORG_ROLES and source_org_id != current_user.organization_id:
         raise not_found
+
+    is_owner = source is not None and source.user_id == current_user.id
+    if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
+        if not is_owner:
+            raise not_found
+
+    # DATA PRIVACY ENFORCEMENT:
+    # Real / benign communications (NORMAL, SAFE, BENIGN) are strictly confidential
+    # to the employee uploader. Org Managers, System Admins, and Cyber Cell Investigators
+    # are restricted to phishing / threat data and cannot inspect benign communications.
+    is_benign = email.qualification_status in ["NORMAL", "SAFE", "BENIGN"]
+    if not is_owner and is_benign:
+        raise not_found
+
+    threat_score = float(analysis.threat_risk_score) if analysis and analysis.threat_risk_score is not None else None
+    evidence_conf = float(analysis.evidence_confidence_score) if analysis and analysis.evidence_confidence_score is not None else None
+    threat_class = analysis.threat_classification if analysis else None
 
     resp = EmailDetailResponse(
         id=str(email.id),
@@ -1145,6 +1199,9 @@ async def get_email_details(
         updated_at=(email.updated_at or datetime.now(timezone.utc)).isoformat(),
         sha256_hash=evidence.sha256_hash if evidence else None,
         evidence_id=str(evidence.id) if evidence else None,
+        threat_risk_score=threat_score,
+        evidence_confidence_score=evidence_conf,
+        threat_classification=threat_class,
     )
     _EMAIL_CACHE[cache_key] = (now, resp.model_dump())
     try:
@@ -1206,10 +1263,13 @@ async def list_emails(
                 return EmailListResponse(**r_data)
         except Exception:
             pass
+    from app.models.analysis import EmailAnalysis
+
     list_query = (
-        select(Email, EmailSource, EvidenceObject)
+        select(Email, EmailSource, EvidenceObject, EmailAnalysis)
         .outerjoin(EmailSource, Email.source_id == EmailSource.id)
         .outerjoin(EvidenceObject, Email.id == EvidenceObject.email_id)
+        .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
         .order_by(desc(Email.created_at))
     )
 
@@ -1218,8 +1278,18 @@ async def list_emails(
             or_(EmailSource.organization_id == requested_org_id, EmailSource.organization_id.is_(None))
         )
 
+    # DATA PRIVACY & SCOPING:
+    # - Plain USER accounts: only emails they personally uploaded.
+    # - Org Admins, System Admins, and Cyber Cell: their own uploads, plus employee/org emails ONLY if flagged for phishing/threats (no benign employee communications).
     if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
         list_query = list_query.where(EmailSource.user_id == current_user.id)
+    else:
+        list_query = list_query.where(
+            or_(
+                EmailSource.user_id == current_user.id,
+                Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]),
+            )
+        )
 
     if analysis_status:
         list_query = list_query.where(Email.analysis_status == analysis_status)
@@ -1248,10 +1318,19 @@ async def list_emails(
             )
         if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
             count_base = count_base.where(EmailSource.user_id == current_user.id)
+        else:
+            count_base = count_base.where(
+                or_(
+                    EmailSource.user_id == current_user.id,
+                    Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]),
+                )
+            )
         if analysis_status:
             count_base = count_base.where(Email.analysis_status == analysis_status)
         if qualification_status:
             count_base = count_base.where(Email.qualification_status == qualification_status)
+        if threat_only:
+            count_base = count_base.where(Email.qualification_status.notin_(["NORMAL", "SAFE", "BENIGN"]))
         count_result = await db.execute(count_base)
         total_count = count_result.scalar_one()
 
@@ -1260,6 +1339,12 @@ async def list_emails(
         email = row[0]
         source = row[1] if len(row) > 1 else None
         evidence = row[2] if len(row) > 2 else None
+        analysis = row[3] if len(row) > 3 else None
+
+        threat_score = float(analysis.threat_risk_score) if analysis and analysis.threat_risk_score is not None else None
+        evidence_conf = float(analysis.evidence_confidence_score) if analysis and analysis.evidence_confidence_score is not None else None
+        threat_class = analysis.threat_classification if analysis else None
+
         items.append(
             EmailDetailResponse(
                 id=str(email.id),
@@ -1279,6 +1364,9 @@ async def list_emails(
                 evidence_id=str(evidence.id) if evidence else None,
                 organization_id=str(source.organization_id) if (source and source.organization_id) else (str(email.organization_id) if email.organization_id else None),
                 organization_name="Personal Workspace" if (source and source.organization_id) else "Global",
+                threat_risk_score=threat_score,
+                evidence_confidence_score=evidence_conf,
+                threat_classification=threat_class,
             )
         )
 

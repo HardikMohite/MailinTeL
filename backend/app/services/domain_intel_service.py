@@ -203,18 +203,105 @@ async def enrich_email_domains(
 
     results: List[DomainIntelBundle] = []
     intel_engine = engine or DomainIntelligenceEngine()
+    targets = [d for d in domains_to_query[:10] if d]
 
-    for d_name in domains_to_query:
-        try:
-            bundle = await enrich_and_persist_domain_intelligence(
-                domain_name=d_name,
-                db=db,
-                engine=intel_engine,
-                auto_commit=False,
-            )
-            results.append(bundle)
-        except Exception as e:
-            logger.warning(f"Error enriching domain {d_name} for email {email_id}: {e}")
+    # 1. Fast in-memory cache check (0ms)
+    now_ts = time.time()
+    uncached_domains: List[str] = []
+    for d in targets:
+        cached = _DOMAIN_CACHE.get(d)
+        if cached and (now_ts - cached[0]) < _DOMAIN_CACHE_TTL_SECONDS:
+            results.append(cached[1])
+        else:
+            uncached_domains.append(d)
+
+    if uncached_domains:
+        # 2. Check Database in batch for existing domain records
+        stmt = select(Domain).where(Domain.normalized_domain.in_(uncached_domains))
+        res = await db.execute(stmt)
+        found_domains = {dom.normalized_domain: dom for dom in res.scalars().all()}
+
+        still_to_analyze: List[str] = []
+        for d in uncached_domains:
+            if d in found_domains:
+                try:
+                    bundle = await enrich_and_persist_domain_intelligence(
+                        domain_name=d,
+                        db=db,
+                        engine=intel_engine,
+                        auto_commit=False,
+                    )
+                    results.append(bundle)
+                except Exception as e:
+                    logger.debug(f"Error loading domain {d} from DB: {e}")
+            else:
+                still_to_analyze.append(d)
+
+        # 3. For new domains not in DB, resolve DNS/RDAP concurrently using asyncio.gather
+        if still_to_analyze:
+            sem = asyncio.Semaphore(5)
+
+            async def _analyze_safe(d_name: str) -> Optional[Tuple[str, DomainIntelBundle]]:
+                async with sem:
+                    try:
+                        bundle = await asyncio.wait_for(
+                            intel_engine.analyze_domain(d_name),
+                            timeout=2.0,
+                        )
+                        return (d_name, bundle)
+                    except Exception as exc:
+                        logger.debug(f"DNS/RDAP analysis timed out or failed for {d_name}: {exc}")
+                        return None
+
+            analyzed_tuples = await asyncio.gather(*[_analyze_safe(d) for d in still_to_analyze])
+
+            now_utc = datetime.now(timezone.utc)
+            for item in analyzed_tuples:
+                if not item:
+                    continue
+                d_name, bundle = item
+                results.append(bundle)
+                _DOMAIN_CACHE[d_name] = (now_ts, bundle)
+
+                # Persist to DB sequentially (safe for single AsyncSession)
+                try:
+                    domain_record = Domain(
+                        id=uuid.uuid4(),
+                        normalized_domain=bundle.domain,
+                        root_domain=bundle.root_domain,
+                        first_seen_at=now_utc,
+                        created_at=now_utc,
+                        updated_at=now_utc,
+                    )
+                    db.add(domain_record)
+                    await db.flush()
+
+                    for r in bundle.dns_records:
+                        db.add(DomainDNSRecord(
+                            id=uuid.uuid4(),
+                            domain_id=domain_record.id,
+                            record_type=r.record_type,
+                            record_value=r.record_value,
+                            observed_at=now_utc,
+                            source="DNS_QUERY",
+                        ))
+
+                    if bundle.registration_intel:
+                        reg = bundle.registration_intel
+                        db.add(DomainRegistrationIntel(
+                            id=uuid.uuid4(),
+                            domain_id=domain_record.id,
+                            source=reg.source,
+                            registrar=reg.registrar,
+                            registered_at=reg.registered_at,
+                            expires_at=reg.expires_at,
+                            nameservers={"nameservers": reg.nameservers},
+                            raw_summary=reg.raw_summary,
+                            retrieved_at=now_utc,
+                            created_at=now_utc,
+                        ))
+                except Exception as e:
+                    logger.debug(f"Error persisting domain {d_name}: {e}")
 
     await db.commit()
     return results

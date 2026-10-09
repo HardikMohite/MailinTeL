@@ -112,15 +112,14 @@ async def test_get_authorized_email_admin_sees_any_org_email():
 @pytest.mark.asyncio
 async def test_get_authorized_campaign_denies_user_with_no_owned_membership():
     campaign_id = uuid.uuid4()
-    campaign_obj = Campaign(id=campaign_id, organization_id=TEST_ORG_ID)
+    other_org_id = uuid.uuid4()
+    campaign_obj = Campaign(id=campaign_id, organization_id=other_org_id)
 
     campaign_result = MagicMock()
     campaign_result.scalar_one_or_none.return_value = campaign_obj
-    owns_result = MagicMock()
-    owns_result.first.return_value = None  # no owned membership row
 
     mock_session = AsyncMock()
-    mock_session.execute = AsyncMock(side_effect=[campaign_result, owns_result])
+    mock_session.execute = AsyncMock(return_value=campaign_result)
 
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:

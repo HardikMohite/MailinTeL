@@ -26,6 +26,12 @@ class User(Base):
         nullable=False,
         index=True,
     )
+    username: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
     full_name: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
@@ -77,7 +83,7 @@ class User(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<User(id={self.id}, email='{self.email}', status='{self.status}')>"
+        return f"<User(id={self.id}, username='{self.username}', email='{self.email}', status='{self.status}')>"
 
 
 class Organization(Base):

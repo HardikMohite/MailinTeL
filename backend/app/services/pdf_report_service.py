@@ -14,6 +14,8 @@ from reportlab.graphics.shapes import Drawing, Rect, String, Line, Group, Polygo
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
 
 
+from reportlab.pdfgen import canvas
+
 # Brand asset paths
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
@@ -21,44 +23,61 @@ LOGO_PATH = os.path.join(BACKEND_DIR, "app", "static", "assets", "mailintel_symb
 WATERMARK_PATH = os.path.join(BACKEND_DIR, "app", "static", "assets", "mailintel_watermark.png")
 
 
-def draw_page_decorations(canvas, doc):
+class ForensicNumberedCanvas(canvas.Canvas):
     """
-    Draws the official MailinTeL watermark symbol in subtle opacity on the background layer,
-    and renders the formal clean footer on every page.
+    Two-pass canvas that dynamically calculates and prints total page counts
+    ('Page X of Y') along with tamper-evident forensic watermark and running footer.
     """
-    canvas.saveState()
-    page_w, page_h = doc.pagesize
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_page_states = []
 
-    # 1. Subtle Center Watermark (A4 dimensions: 595.27 x 841.89 pt)
-    if os.path.exists(WATERMARK_PATH):
-        wm_size = 320
-        wm_x = (page_w - wm_size) / 2
-        wm_y = (page_h - wm_size) / 2 + 15
-        try:
-            canvas.drawImage(
-                WATERMARK_PATH,
-                wm_x,
-                wm_y,
-                width=wm_size,
-                height=wm_size,
-                mask='auto',
-                preserveAspectRatio=True
-            )
-        except Exception:
-            pass
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
 
-    # 2. Running Footer Line & Metadata
-    footer_y = 26
-    canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
-    canvas.setLineWidth(0.6)
-    canvas.line(36, footer_y, page_w - 36, footer_y)
+    def save(self):
+        num_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_decorations(num_pages)
+            super().showPage()
+        super().save()
 
-    canvas.setFont("Helvetica-Bold", 6.5)
-    canvas.setFillColor(colors.HexColor("#64748b"))
-    canvas.drawString(36, footer_y - 10, "MAILINTEL EMAIL FORENSIC REPORT  |  CONFIDENTIAL  |  TLP:AMBER+STRICT")
-    canvas.drawRightString(page_w - 36, footer_y - 10, f"Page {canvas._pageNumber} of 2")
+    def draw_decorations(self, num_pages: int):
+        self.saveState()
+        page_w, page_h = self._pagesize
 
-    canvas.restoreState()
+        # 1. Subtle Center Watermark
+        if os.path.exists(WATERMARK_PATH):
+            wm_size = 320
+            wm_x = (page_w - wm_size) / 2
+            wm_y = (page_h - wm_size) / 2 + 15
+            try:
+                self.drawImage(
+                    WATERMARK_PATH,
+                    wm_x,
+                    wm_y,
+                    width=wm_size,
+                    height=wm_size,
+                    mask='auto',
+                    preserveAspectRatio=True
+                )
+            except Exception:
+                pass
+
+        # 2. Running Footer Line & Tamper-Evident Metadata
+        footer_y = 26
+        self.setStrokeColor(colors.HexColor("#cbd5e1"))
+        self.setLineWidth(0.6)
+        self.line(36, footer_y, page_w - 36, footer_y)
+
+        self.setFont("Helvetica-Bold", 6.5)
+        self.setFillColor(colors.HexColor("#64748b"))
+        self.drawString(36, footer_y - 10, "MAILINTEL EMAIL FORENSIC REPORT  |  CONFIDENTIAL  |  TLP:AMBER+STRICT")
+        self.drawRightString(page_w - 36, footer_y - 10, f"Page {self._pageNumber} of {num_pages}")
+
+        self.restoreState()
 
 
 class PDFReportService:
@@ -187,26 +206,10 @@ class PDFReportService:
         return d
 
     @classmethod
-    def render_pdf_report(cls, data: Dict[str, Any]) -> bytes:
+    def build_email_story(cls, data: Dict[str, Any]) -> List[Any]:
         """
-        Builds and renders the strictly two-page A4 forensic email threat intelligence report.
-        Returns raw PDF bytes.
+        Builds the complete flowable story elements for a single email forensic dossier.
         """
-        buffer = io.BytesIO()
-        
-        # A4 Page Size: 595.27 x 841.89 pt
-        # Margins: 36 pt left, right, top, bottom.
-        # Printable Width: 523.27 pt (~523 pt)
-        # Printable Height: 769.89 pt (~770 pt)
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=A4,
-            leftMargin=36,
-            rightMargin=36,
-            topMargin=36,
-            bottomMargin=36,
-        )
-        
         # Typography & Styles
         styles = getSampleStyleSheet()
         
@@ -938,14 +941,158 @@ class PDFReportService:
             ('RIGHTPADDING', (0, 0), (-1, -1), 6),
         ]))
         story.append(disclaimer_table)
+        return story
 
-        # Build A4 document with background decorations callback
-        doc.build(
-            story,
-            onFirstPage=draw_page_decorations,
-            onLaterPages=draw_page_decorations,
+    @classmethod
+    def render_pdf_report(cls, data: Dict[str, Any]) -> bytes:
+        """
+        Builds and renders the official A4 forensic email threat intelligence report.
+        Returns raw PDF bytes.
+        """
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            leftMargin=36,
+            rightMargin=36,
+            topMargin=36,
+            bottomMargin=36,
         )
-        
+        story = cls.build_email_story(data)
+        doc.build(story, canvasmaker=ForensicNumberedCanvas)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return pdf_bytes
+
+    @classmethod
+    def render_multi_email_pdf_report(cls, reports: List[Dict[str, Any]]) -> bytes:
+        """
+        Builds a consolidated multi-case forensic dossier containing an executive summary
+        table followed by each individual email's detailed forensic analysis report.
+        Returns raw PDF bytes.
+        """
+        if not reports:
+            return b""
+        if len(reports) == 1:
+            return cls.render_pdf_report(reports[0])
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            leftMargin=36,
+            rightMargin=36,
+            topMargin=36,
+            bottomMargin=36,
+        )
+        styles = getSampleStyleSheet()
+        doc_title_style = ParagraphStyle(
+            'BatchTitle', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=15, leading=18, textColor=colors.HexColor('#0f172a')
+        )
+        doc_sub_style = ParagraphStyle(
+            'BatchSub', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=7.5, leading=10, textColor=colors.HexColor('#0284c7')
+        )
+        table_hdr = ParagraphStyle(
+            'BatchTblHdr', parent=styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=7, leading=9, textColor=colors.HexColor('#1e293b')
+        )
+        table_cell = ParagraphStyle(
+            'BatchTblCell', parent=styles['Normal'],
+            fontName='Helvetica', fontSize=6.5, leading=8.5, textColor=colors.HexColor('#1e293b')
+        )
+        table_mono = ParagraphStyle(
+            'BatchTblMono', parent=styles['Normal'],
+            fontName='Courier', fontSize=6.5, leading=8.5, textColor=colors.HexColor('#0f172a')
+        )
+
+        full_story: List[Any] = []
+
+        # Executive Summary Cover Sheet
+        full_story.append(Paragraph("<b>MailinTeL</b> &bull; Consolidated Forensic Investigation Dossier", doc_title_style))
+        full_story.append(Spacer(1, 2))
+        full_story.append(Paragraph(
+            f"BATCH FORENSIC REPORT &bull; <b>{len(reports)} Cases Preserved</b> &bull; ISO/IEC 27037 Tamper-Evident Custody Chain",
+            doc_sub_style
+        ))
+        full_story.append(Spacer(1, 6))
+
+        # Metrics chips
+        mal_count = sum(1 for r in reports if (r.get("explainable_scores", {}).get("threat_risk_score", 0) >= 65))
+        susp_count = sum(1 for r in reports if (35 <= r.get("explainable_scores", {}).get("threat_risk_score", 0) < 65))
+        safe_count = len(reports) - mal_count - susp_count
+
+        metrics_data = [
+            [
+                Paragraph(f"<b>Total Cases:</b> {len(reports)}", table_hdr),
+                Paragraph(f"<font color='#dc2626'><b>Phishing/Malicious:</b> {mal_count}</font>", table_hdr),
+                Paragraph(f"<font color='#d97706'><b>Suspicious:</b> {susp_count}</font>", table_hdr),
+                Paragraph(f"<font color='#16a34a'><b>Legitimate/Clean:</b> {safe_count}</font>", table_hdr),
+            ]
+        ]
+        t_metrics = Table(metrics_data, colWidths=[120, 140, 130, 133])
+        t_metrics.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
+            ('BOX', (0,0), (-1,-1), 0.75, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ]))
+        full_story.append(t_metrics)
+        full_story.append(Spacer(1, 8))
+
+        # Table of cases
+        case_rows = [
+            [
+                Paragraph("<b>#</b>", table_hdr),
+                Paragraph("<b>Subject / Title</b>", table_hdr),
+                Paragraph("<b>Sender Address</b>", table_hdr),
+                Paragraph("<b>Date Header</b>", table_hdr),
+                Paragraph("<b>Verdict</b>", table_hdr),
+                Paragraph("<b>Score</b>", table_hdr),
+                Paragraph("<b>SHA-256 Custody Seal</b>", table_hdr),
+            ]
+        ]
+        for idx, r in enumerate(reports, 1):
+            m = r.get("email_metadata", {})
+            sc = r.get("explainable_scores", {})
+            score = float(sc.get("threat_risk_score") or 0.0)
+            c = '#dc2626' if score >= 65 else ('#d97706' if score >= 35 else '#16a34a')
+            v_name = sc.get("threat_classification") or ("MALICIOUS" if score >= 65 else ("SUSPICIOUS" if score >= 35 else "LEGITIMATE"))
+            
+            case_rows.append([
+                Paragraph(str(idx), table_cell),
+                Paragraph(str(m.get("subject") or "Untitled")[:38], table_cell),
+                Paragraph(str(m.get("from_address") or "Unknown")[:30], table_cell),
+                Paragraph(str(m.get("date_header") or "N/A")[:16], table_cell),
+                Paragraph(f"<font color='{c}'><b>{v_name}</b></font>", table_cell),
+                Paragraph(f"{score:.0f}/100", table_cell),
+                Paragraph(str(m.get("sha256_hash") or "N/A")[:16] + "...", table_mono),
+            ])
+
+        t_cases = Table(case_rows, colWidths=[20, 145, 125, 75, 55, 38, 65])
+        t_cases.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f1f5f9')),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.HexColor('#ffffff'), colors.HexColor('#f8fafc')]),
+            ('TOPPADDING', (0,0), (-1,-1), 3),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ('LEFTPADDING', (0,0), (-1,-1), 3),
+            ('RIGHTPADDING', (0,0), (-1,-1), 3),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        full_story.append(t_cases)
+        full_story.append(PageBreak())
+
+        # For each email case, append its full dossier
+        for idx, r in enumerate(reports):
+            if idx > 0:
+                full_story.append(PageBreak())
+            full_story.extend(cls.build_email_story(r))
+
+        doc.build(full_story, canvasmaker=ForensicNumberedCanvas)
         pdf_bytes = buffer.getvalue()
         buffer.close()
         return pdf_bytes

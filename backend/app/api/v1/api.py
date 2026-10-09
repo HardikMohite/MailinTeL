@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from app.api.v1.endpoints import (
     health, jobs, emails, evidence, intelligence, scoring, dna,
     similarity, campaigns, graph, geo, reports, auth, users, platform_admin, ai, disposition,
+    dashboard, sandbox, notifications_ws,
 )
 from app.api.deps import get_current_user
 
@@ -34,4 +35,7 @@ api_router.include_router(users.router, prefix="/users", tags=["Users & Access M
 api_router.include_router(platform_admin.router, prefix="/platform", tags=["Platform Administration"], dependencies=_auth_required)
 api_router.include_router(ai.router, prefix="/ai", tags=["AI & RAG Intelligence"], dependencies=_auth_required)
 api_router.include_router(disposition.router, prefix="/disposition", tags=["Human Review & Active Learning"], dependencies=_auth_required)
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"], dependencies=_auth_required)
+api_router.include_router(sandbox.router, prefix="", tags=["Sandbox Forensic Detonation"], dependencies=_auth_required)
+api_router.include_router(notifications_ws.router, prefix="", tags=["WebSocket & Real-Time Alerts"])
 

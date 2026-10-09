@@ -44,8 +44,8 @@ class RedisManager:
             self._client = aioredis.from_url(
                 url,
                 decode_responses=True,
-                socket_timeout=3.0,
-                socket_connect_timeout=3.0,
+                socket_timeout=6.0,
+                socket_connect_timeout=6.0,
                 retry_on_timeout=True,
                 health_check_interval=30,
                 max_connections=30,

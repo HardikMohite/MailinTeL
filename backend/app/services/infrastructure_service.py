@@ -165,18 +165,107 @@ async def enrich_email_infrastructure(
     results: List[IPIntelBundle] = []
     intel_engine = engine or InfrastructureIntelligenceEngine()
 
-    # Sequential DB persistence to eliminate concurrency collisions on the AsyncSession
+    # 1. Fast in-memory cache check (0ms)
+    now_ts = time.time()
+    uncached_ips: List[str] = []
     for ip_str in ips_to_query:
-        try:
-            bundle = await enrich_and_persist_ip_intelligence(
-                ip_str=ip_str,
-                db=db,
-                engine=intel_engine,
-                auto_commit=False,
-            )
-            results.append(bundle)
-        except Exception as e:
-            logger.warning(f"Error enriching IP {ip_str} for email {email_id}: {e}")
+        cached = _IP_CACHE.get(ip_str)
+        if cached and (now_ts - cached[0]) < _IP_CACHE_TTL_SECONDS:
+            results.append(cached[1])
+        else:
+            uncached_ips.append(ip_str)
+
+    if uncached_ips:
+        # 2. Check Database in batch for existing IP records
+        stmt = select(IPAddress).where(IPAddress.ip_address.in_(uncached_ips))
+        res = await db.execute(stmt)
+        found_ips = {r.ip_address: r for r in res.scalars().all()}
+
+        still_to_analyze: List[str] = []
+        for ip_str in uncached_ips:
+            if ip_str in found_ips:
+                try:
+                    bundle = await enrich_and_persist_ip_intelligence(
+                        ip_str=ip_str,
+                        db=db,
+                        engine=intel_engine,
+                        auto_commit=False,
+                    )
+                    results.append(bundle)
+                except Exception as e:
+                    logger.debug(f"Error loading IP {ip_str} from DB: {e}")
+            else:
+                still_to_analyze.append(ip_str)
+
+        # 3. For new IPs not in DB, resolve network PTR/ASN concurrently using asyncio.gather
+        if still_to_analyze:
+            sem = asyncio.Semaphore(5)
+
+            async def _analyze_ip_safe(ip: str) -> Optional[Tuple[str, IPIntelBundle]]:
+                async with sem:
+                    try:
+                        bundle = await asyncio.wait_for(
+                            intel_engine.analyze_ip(ip),
+                            timeout=2.0,
+                        )
+                        return (ip, bundle)
+                    except Exception as exc:
+                        logger.debug(f"IP analysis timed out or failed for {ip}: {exc}")
+                        return None
+
+            analyzed_tuples = await asyncio.gather(*[_analyze_ip_safe(ip) for ip in still_to_analyze])
+
+            now_utc = datetime.now(timezone.utc)
+            for item in analyzed_tuples:
+                if not item:
+                    continue
+                ip_str, bundle = item
+                results.append(bundle)
+                _IP_CACHE[ip_str] = (now_ts, bundle)
+
+                try:
+                    ip_record = IPAddress(
+                        id=uuid.uuid4(),
+                        ip_address=bundle.ip_address,
+                        first_seen_at=now_utc,
+                        created_at=now_utc,
+                    )
+                    db.add(ip_record)
+                    await db.flush()
+
+                    ip_intel = IPIntelligence(
+                        id=uuid.uuid4(),
+                        ip_id=ip_record.id,
+                        asn=bundle.asn,
+                        isp=bundle.isp,
+                        network_owner=bundle.network_owner,
+                        hosting_provider=bundle.hosting_provider,
+                        reverse_dns=bundle.reverse_dns,
+                        intelligence_source="RDAP_DNS",
+                        retrieved_at=now_utc,
+                        metadata_json={
+                            "ip_type": bundle.ip_type,
+                            "is_private": bundle.is_private,
+                            "asn_org": bundle.asn_org,
+                            "country_code": bundle.country_code,
+                            "risk_level": bundle.risk_level,
+                            "risk_tags": bundle.risk_tags,
+                        },
+                    )
+                    db.add(ip_intel)
+
+                    for c in bundle.classifications:
+                        db.add(InfrastructureClassification(
+                            id=uuid.uuid4(),
+                            ip_id=ip_record.id,
+                            classification_type=c.classification_type,
+                            confidence=c.confidence,
+                            source=c.source,
+                            evidence=c.evidence,
+                            observed_at=now_utc,
+                        ))
+                except Exception as e:
+                    logger.debug(f"Error persisting IP {ip_str}: {e}")
 
     await db.commit()
     return results

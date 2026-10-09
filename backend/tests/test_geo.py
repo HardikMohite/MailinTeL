@@ -390,3 +390,123 @@ async def test_geo_classification_tor_vpn_cloud_personal_mail():
     assert mail_res["is_personal_mail"] is True
     assert mail_res["connection_type"] == "PERSONAL_MAIL"
 
+
+def test_forwarding_tracker_detection():
+    from app.intelligence.forwarding_tracker import default_forwarding_tracker
+
+    headers = [
+        {"header_name": "X-Forwarded-For", "header_value": "115.112.44.2"},
+        {"header_name": "X-Forwarded-To", "header_value": "target@corp.internal"},
+        {"header_name": "Resent-From", "header_value": "alice-forwarder@partner.org"},
+        {"header_name": "Resent-To", "header_value": "bob@security.net"},
+        {"header_name": "ARC-Seal", "header_value": "i=1; a=rsa-sha256; s=arc; d=mail.com"},
+        {"header_name": "ARC-Authentication-Results", "header_value": "i=1; spf=pass (client-ip=115.112.44.2)"},
+    ]
+
+    res = default_forwarding_tracker.analyze_forwarding(headers)
+    assert res.is_forwarded is True
+    assert res.forwarding_type == "RESENT_FORWARD"
+    assert "alice-forwarder@partner.org" in res.forwarder_addresses
+    assert res.client_submission_ip == "115.112.44.2"
+    assert res.is_client_ip_public is True
+    assert res.arc_chain_count == 1
+    assert len(res.forwarding_hops) >= 2
+
+
+def test_origin_deducer_aws_ec2_relay_unmasking():
+    from app.intelligence.origin_deducer import human_origin_deducer
+
+    raw_headers = [
+        {"header_name": "Date", "header_value": "Thu, 8 Oct 2026 14:30:00 +0530"},
+        {"header_name": "From", "header_value": "accounts@finance-portal.com"},
+        {"header_name": "Subject", "header_value": "Important Billing Update"},
+    ]
+
+    hops = [
+        {
+            "sequence_number": 1,
+            "source_ip": "54.210.1.2",
+            "source_host": "ec2-54-210-1-2.compute-1.amazonaws.com",
+            "provider": "Amazon AWS EC2",
+            "asn": "AS16509",
+            "is_cloud": True,
+            "country_name": "United States",
+            "city_name": "Ashburn",
+            "latitude": 39.0438,
+            "longitude": -77.4874,
+        }
+    ]
+
+    verdict = human_origin_deducer.deduce_origin(raw_headers=raw_headers, hops=hops)
+    assert verdict.is_proxy_or_cloud_relayed is True
+    assert verdict.proxy_type == "AWS_CLOUD_INSTANCE"
+    assert verdict.deduced_country == "India"
+    assert verdict.deduced_city == "Mumbai"
+    assert verdict.latitude is not None
+    assert verdict.longitude is not None
+    assert verdict.confidence_score >= 40.0
+    assert "Amazon AWS EC2" in verdict.forensic_explanation
+
+
+def test_origin_deducer_receiver_separation_and_recipient_gateway():
+    """
+    Forensically verify that the recipient (the platform user) in the To header
+    is NEVER conflated with the sender, and that sender egress vs recipient inbound
+    gateway are properly distinguished.
+    """
+    from app.intelligence.origin_deducer import human_origin_deducer
+    raw_headers = [
+        {"header_name": "From", "header_value": "external-adversary@suspicious-domain.xyz"},
+        {"header_name": "To", "header_value": "victim.student@sakec.ac.in"},
+        {"header_name": "X-Originating-IP", "header_value": "[103.21.244.5]"},
+        {"header_name": "Date", "header_value": "Thu, 8 Oct 2026 10:00:00 +0530"},
+    ]
+
+    hops = [
+        # Hop 1: Sender's outgoing SMTP relay (AWS EC2)
+        {
+            "sequence_number": 1,
+            "source_ip": "3.80.20.1",
+            "source_host": "ec2-3-80-20-1.compute-1.amazonaws.com",
+            "provider": "Amazon AWS EC2",
+            "asn": "AS16509",
+            "is_cloud": True,
+            "country_name": "United States",
+            "city_name": "Ashburn",
+            "latitude": 39.0438,
+            "longitude": -77.4874,
+        },
+        # Hop 2: Platform user / Recipient's Inbound Gateway (Exchange / Postfix)
+        {
+            "sequence_number": 2,
+            "source_ip": "104.47.12.1",
+            "source_host": "mail.protection.outlook.com",
+            "provider": "Microsoft Corporation",
+            "asn": "AS8075",
+            "country_name": "United Kingdom",
+            "city_name": "London",
+            "latitude": 51.5074,
+            "longitude": -0.1278,
+        },
+    ]
+
+    verdict = human_origin_deducer.deduce_origin(raw_headers=raw_headers, hops=hops)
+    # The sender's physical origin must be deduced from the sender's client submission IP (103.21.244.5)
+    assert verdict.client_submission_ip == "103.21.244.5"
+    assert verdict.deduced_country == "India"
+    assert verdict.deduced_city == "Mumbai"
+
+    # Sender Outbound Relay
+    assert verdict.server_infrastructure_location.get("ip_address") == "3.80.20.1"
+    assert verdict.is_proxy_or_cloud_relayed is True
+
+    # Recipient Gateway (Platform User's Inbound Server)
+    assert verdict.recipient_gateway_location.get("ip_address") == "104.47.12.1"
+    assert verdict.recipient_gateway_location.get("city") == "London"
+
+    # Verify that sakec.ac.in in To: was NOT misattributed as the sender's institutional identity
+    evidence_categories = [s.category for s in verdict.evidence_signals]
+    assert "RECIPIENT_ENDPOINT" in evidence_categories
+
+
+

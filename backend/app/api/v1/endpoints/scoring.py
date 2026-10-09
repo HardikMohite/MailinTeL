@@ -66,8 +66,7 @@ async def get_email_analysis(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> EmailAnalysisResponse:
-    """Retrieve existing analysis or compute live scoring for an email."""
-    await get_authorized_email(email_id, current_user, db)
+    email_obj = await get_authorized_email(email_id, current_user, db)
 
     # Check for existing completed analysis
     stmt_analysis = (
@@ -113,23 +112,63 @@ async def get_email_analysis(
             created_at=analysis_obj.created_at.isoformat(),
         )
 
-    # If no analysis exists, execute live scoring pipeline
-    result = await execute_email_analysis_and_scoring(email_id=email_id, db=db)
-    return EmailAnalysisResponse(
-        analysis_run_id=result["analysis_run_id"],
-        email_id=result["email_id"],
-        threat_classification=result["threat_classification"],
-        threat_risk_score=result["threat_risk_score"],
-        evidence_confidence_score=result["evidence_confidence_score"],
-        summary=result["summary"],
-        compromised_account_likelihood=result["compromised_account_likelihood"],
-        spoofed_domain_likelihood=result["spoofed_domain_likelihood"],
-        anonymized_infrastructure_likelihood=result["anonymized_infrastructure_likelihood"],
-        malicious_environment_likelihood=result["malicious_environment_likelihood"],
-        findings=[AnalysisFindingSchema(**f) for f in result["findings"]],
-        scoring_pillars=result.get("scoring_pillars", {}),
-        created_at=result.get("created_at", datetime.now(timezone.utc).isoformat()),
-    )
+    # If email analysis is currently queued or running, return non-blocking pending response immediately
+    if email_obj.analysis_status in ("PENDING", "PROCESSING", "RUNNING"):
+        return EmailAnalysisResponse(
+            analysis_run_id=str(uuid.uuid4()),
+            email_id=str(email_id),
+            threat_classification="ANALYZING",
+            threat_risk_score=0.0,
+            evidence_confidence_score=0.0,
+            summary="Forensic analysis and threat scoring are currently processing in the background.",
+            compromised_account_likelihood="UNLIKELY",
+            spoofed_domain_likelihood="UNLIKELY",
+            anonymized_infrastructure_likelihood="UNLIKELY",
+            malicious_environment_likelihood="UNLIKELY",
+            findings=[],
+            scoring_pillars={},
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    # If no analysis exists and not running, execute scoring with a strict timeout
+    try:
+        import asyncio
+        result = await asyncio.wait_for(
+            execute_email_analysis_and_scoring(email_id=email_id, db=db),
+            timeout=12.0,
+        )
+        return EmailAnalysisResponse(
+            analysis_run_id=result["analysis_run_id"],
+            email_id=result["email_id"],
+            threat_classification=result["threat_classification"],
+            threat_risk_score=result["threat_risk_score"],
+            evidence_confidence_score=result["evidence_confidence_score"],
+            summary=result["summary"],
+            compromised_account_likelihood=result["compromised_account_likelihood"],
+            spoofed_domain_likelihood=result["spoofed_domain_likelihood"],
+            anonymized_infrastructure_likelihood=result["anonymized_infrastructure_likelihood"],
+            malicious_environment_likelihood=result["malicious_environment_likelihood"],
+            findings=[AnalysisFindingSchema(**f) for f in result["findings"]],
+            scoring_pillars=result.get("scoring_pillars", {}),
+            created_at=result.get("created_at", datetime.now(timezone.utc).isoformat()),
+        )
+    except Exception as exc:
+        logger.warning(f"Live scoring timed out or failed for {email_id}: {exc}")
+        return EmailAnalysisResponse(
+            analysis_run_id=str(uuid.uuid4()),
+            email_id=str(email_id),
+            threat_classification="ANALYZING",
+            threat_risk_score=0.0,
+            evidence_confidence_score=0.0,
+            summary="Forensic analysis in progress.",
+            compromised_account_likelihood="UNLIKELY",
+            spoofed_domain_likelihood="UNLIKELY",
+            anonymized_infrastructure_likelihood="UNLIKELY",
+            malicious_environment_likelihood="UNLIKELY",
+            findings=[],
+            scoring_pillars={},
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
 
 
 @router.post(

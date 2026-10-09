@@ -225,3 +225,7 @@ async def root():
 
 # Mount API v1 Router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+# Mount WebSockets & Notifications at root level for straightforward ws:// URL resolution
+from app.api.v1.endpoints.notifications_ws import router as notifications_ws_router
+app.include_router(notifications_ws_router)

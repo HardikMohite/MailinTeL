@@ -740,6 +740,16 @@ class ReportService:
         return "\n".join(md)
 
     @staticmethod
+    def render_pdf_report(data: Dict[str, Any]) -> bytes:
+        """Renders an ISO/IEC 27037 compliant tamper-evident forensic PDF report."""
+        return PDFReportService.render_pdf_report(data)
+
+    @staticmethod
+    def render_multi_email_pdf_report(reports: List[Dict[str, Any]]) -> bytes:
+        """Renders an executive consolidated multi-case forensic dossier PDF."""
+        return PDFReportService.render_multi_email_pdf_report(reports)
+
+    @staticmethod
     def render_html_report(data: Dict[str, Any]) -> str:
         """
         Renders an exact, professional 2-page law-enforcement/enterprise forensic dossier
@@ -849,10 +859,10 @@ class ReportService:
                     "source": "Threat Intelligence",
                     "verdict": "BENIGN"
                 })
-        else:
+        elif meta.get("from_address") and "@" in meta.get("from_address", ""):
             ioc_rows.append({
                 "type": "DOMAIN",
-                "item": (meta.get("from_address") or "@brevosend.com").split("@")[-1],
+                "item": meta.get("from_address", "").split("@")[-1],
                 "source": "Threat Intelligence",
                 "verdict": "BENIGN"
             })
@@ -1388,11 +1398,11 @@ class ReportService:
           <td class="kv-label">To:</td>
           <td class="kv-val">{', '.join(meta.get('to_addresses', [])) or 'N/A'}</td>
           <td class="kv-label">File Size:</td>
-          <td class="kv-val">{meta.get('file_size_bytes', 9464):,} bytes</td>
+          <td class="kv-val">{meta.get('file_size_bytes', 0):,} bytes</td>
         </tr>
         <tr>
           <td class="kv-label">SHA-256 Hash:</td>
-          <td class="kv-val kv-val-mono" style="font-size: 8px;">{meta.get('sha256_hash') or '69b0f389b99e323e130091bd5813d1c7f9ba9f4353c290392e602f557fb521f4'}</td>
+          <td class="kv-val kv-val-mono" style="font-size: 8px;">{meta.get('sha256_hash') or 'N/A'}</td>
           <td class="kv-label">Attachments:</td>
           <td class="kv-val">{meta.get('attachment_count', 0)} file(s)</td>
         </tr>
@@ -1485,9 +1495,9 @@ class ReportService:
       <table class="kv-table">
         <tr>
           <td class="kv-label">Header Order Hash:</td>
-          <td class="kv-val kv-val-mono" style="font-size: 8px;">{dna.get('technical_fingerprint', {}).get('header_order_hash') or '3694578e6bc352dac677be51376003aac150ec14bc3f669c8d546b37fd119942'}</td>
+          <td class="kv-val kv-val-mono" style="font-size: 8px;">{dna.get('technical_fingerprint', {}).get('header_order_hash') or 'N/A'}</td>
           <td class="kv-label">Originating IP:</td>
-          <td class="kv-val kv-val-mono">{dna.get('infrastructure_fingerprint', {}).get('originating_ip') or '77.32.148.26'}</td>
+          <td class="kv-val kv-val-mono">{dna.get('infrastructure_fingerprint', {}).get('originating_ip') or 'N/A'}</td>
         </tr>
         <tr>
           <td class="kv-label">Overall DNA Hash:</td>

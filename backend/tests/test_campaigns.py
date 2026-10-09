@@ -386,3 +386,72 @@ def test_api_get_email_correlations_endpoint():
         data = resp.json()
         assert data["email_id"] == str(email_id)
         assert data["total_correlated_emails"] == 0
+
+
+def test_api_update_campaign_endpoint():
+    camp_id = uuid.uuid4()
+    mock_campaign = Campaign(
+        id=camp_id,
+        campaign_name="Test Campaign",
+        campaign_status="ACTIVE",
+        campaign_confidence=80.0,
+        organization_id=TEST_USER.organization_id,
+    )
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_campaign
+    mock_db.execute.return_value = mock_result
+    mock_db.commit = AsyncMock()
+
+    updated_details = {
+        "id": str(camp_id),
+        "campaign_name": "Updated Phish Net",
+        "campaign_status": "MITIGATED",
+        "campaign_confidence": 95.0,
+        "threat_summary": "Mitigated across mail gateways",
+        "total_members": 2,
+        "total_evidence_links": 1,
+        "memberships": [],
+        "evidence": [],
+        "events": [],
+    }
+
+    with patch(
+        "app.services.campaign_service.default_campaign_service.get_campaign_details",
+        new=AsyncMock(return_value=updated_details),
+    ):
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[get_current_user] = lambda: TEST_USER
+        resp = client.patch(
+            f"/api/v1/campaigns/{camp_id}",
+            json={"campaign_name": "Updated Phish Net", "campaign_status": "MITIGATED"},
+        )
+        app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaign_status"] == "MITIGATED"
+        assert data["campaign_name"] == "Updated Phish Net"
+
+
+def test_api_delete_campaign_endpoint():
+    camp_id = uuid.uuid4()
+    mock_campaign = Campaign(
+        id=camp_id,
+        campaign_name="Test Campaign",
+        campaign_status="ACTIVE",
+        campaign_confidence=80.0,
+        organization_id=TEST_USER.organization_id,
+    )
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_campaign
+    mock_db.execute.return_value = mock_result
+    mock_db.commit = AsyncMock()
+
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+    resp = client.delete(f"/api/v1/campaigns/{camp_id}")
+    app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert "archived" in resp.json()["message"].lower()
+    assert mock_campaign.campaign_status == "ARCHIVED"

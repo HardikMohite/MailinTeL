@@ -82,17 +82,6 @@ const QUICK_TEMPLATES = [
   'Legitimate verified internal operational communication; heuristic scores cleared.',
 ];
 
-const DEFAULT_PRECEDENT: AnalystPrecedentItem = {
-  precedent_email_id: 'precedent-hardik-alibaug',
-  similarity_score: 88,
-  reviewer_name: 'Admin Hardik',
-  analyst_verdict: 'CONFIRMED_PHISHING',
-  analyst_notes:
-    'Compromised Sendinblue relay 77.32.148.26 sending fake Alibaug getaway holiday itinerary with tracking link.',
-  reviewed_at: new Date().toISOString(),
-  shared_indicators: ['77.32.148.26', '11929178.brevosend.com'],
-};
-
 export const AnalystDispositionPanel: React.FC<AnalystDispositionPanelProps> = ({
   emailId,
   onDispositionUpdated,
@@ -185,7 +174,7 @@ export const AnalystDispositionPanel: React.FC<AnalystDispositionPanelProps> = (
   };
 
   const precedent =
-    data?.precedents && data.precedents.length > 0 ? data.precedents[0] : DEFAULT_PRECEDENT;
+    data?.precedents && data.precedents.length > 0 ? data.precedents[0] : null;
 
   return (
     <div
@@ -320,75 +309,77 @@ export const AnalystDispositionPanel: React.FC<AnalystDispositionPanelProps> = (
         </div>
       )}
 
-      {/* 4. CONTINUOUS MEMORY MATCH CARD */}
-      <div
-        style={{
-          backgroundColor: '#EFF8FF',
-          border: '1px solid #A9D9FF',
-          borderRadius: '11px',
-          padding: '14px',
-        }}
-        className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
-      >
-        <div className="flex items-start gap-3 min-w-0">
-          <div
-            style={{
-              width: '32px',
-              height: '32px',
-              backgroundColor: '#D9ECFA',
-              border: '1px solid #9DD5FF',
-              borderRadius: '8px',
-            }}
-            className="flex items-center justify-center shrink-0 mt-0.5"
-          >
-            <BrainCircuit className="w-4 h-4 text-[#0875CC]" />
-          </div>
-
-          <div className="min-w-0">
+      {/* 4. CONTINUOUS MEMORY MATCH CARD (SHOWN ONLY ON AUTHENTIC PRECEDENTS) */}
+      {precedent && (
+        <div
+          style={{
+            backgroundColor: '#EFF8FF',
+            border: '1px solid #A9D9FF',
+            borderRadius: '11px',
+            padding: '14px',
+          }}
+          className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
+        >
+          <div className="flex items-start gap-3 min-w-0">
             <div
               style={{
-                fontSize: '13px',
-                fontWeight: 700,
-                color: '#0875CC',
+                width: '32px',
+                height: '32px',
+                backgroundColor: '#D9ECFA',
+                border: '1px solid #9DD5FF',
+                borderRadius: '8px',
               }}
+              className="flex items-center justify-center shrink-0 mt-0.5"
             >
-              Continuous Memory Match: Past Precedent Recalled ({precedent.similarity_score}% DNA Match)
+              <BrainCircuit className="w-4 h-4 text-[#0875CC]" />
             </div>
-            <p
-              style={{
-                fontSize: '12px',
-                color: '#52739B',
-                marginTop: '3px',
-                lineHeight: '1.4',
-              }}
-            >
-              <strong style={{ fontWeight: 700, color: '#173B70' }}>
-                Precedent by {precedent.reviewer_name}:
-              </strong>{' '}
-              {precedent.analyst_notes}
-            </p>
-          </div>
-        </div>
 
-        <button
-          type="button"
-          onClick={() => handleApplyPrecedent(precedent)}
-          style={{
-            backgroundColor: '#FFFFFF',
-            border: '1px solid #69BDF5',
-            color: '#0875CC',
-            borderRadius: '7px',
-            padding: '8px 14px',
-            fontWeight: 600,
-            fontSize: '12px',
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-          }}
-          className="self-start sm:self-center hover:bg-blue-50 transition-colors shadow-2xs"
-        >
-          Apply Precedent
-        </button>
-      </div>
+            <div className="min-w-0">
+              <div
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  color: '#0875CC',
+                }}
+              >
+                Continuous Memory Match: Past Precedent Recalled ({precedent.similarity_score}% DNA Match)
+              </div>
+              <p
+                style={{
+                  fontSize: '12px',
+                  color: '#52739B',
+                  marginTop: '3px',
+                  lineHeight: '1.4',
+                }}
+              >
+                <strong style={{ fontWeight: 700, color: '#173B70' }}>
+                  Precedent by {precedent.reviewer_name}:
+                </strong>{' '}
+                {precedent.analyst_notes}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => handleApplyPrecedent(precedent)}
+            style={{
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #69BDF5',
+              color: '#0875CC',
+              borderRadius: '7px',
+              padding: '8px 14px',
+              fontWeight: 600,
+              fontSize: '12px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            className="self-start sm:self-center hover:bg-blue-50 transition-colors shadow-2xs"
+          >
+            Apply Precedent
+          </button>
+        </div>
+      )}
 
       {/* 5. AUTONOMOUS TRIAGE CARD (WHEN NOT EDITING) */}
       {!isEditing && (

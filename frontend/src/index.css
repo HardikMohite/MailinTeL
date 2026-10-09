@@ -139,15 +139,15 @@
   overflow: hidden;
   background: #ffffff;
   border: 1px solid #E2E8F0;
-  border-radius: 0.875rem;
-  box-shadow: 0 1px 3px 0 rgba(16, 28, 51, 0.05), 0 1px 2px -1px rgba(16, 28, 51, 0.03);
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.02);
   transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
 }
 
 .kpi-card:hover {
   transform: translateY(-2.5px);
-  box-shadow: 0 12px 24px -4px rgba(16, 28, 51, 0.08), 0 4px 8px -2px rgba(16, 28, 51, 0.03);
-  border-color: #CBD5E1;
+  box-shadow: 0 12px 28px -4px rgba(37, 99, 235, 0.08), 0 4px 10px -2px rgba(37, 99, 235, 0.04);
+  border-color: #BFDBFE;
 }
 
 .kpi-card::before {
@@ -157,10 +157,10 @@
   left: 0;
   right: 0;
   height: 3px;
-  background: var(--kpi-accent, #2563B8);
-  opacity: 0.9;
-  border-top-left-radius: 0.875rem;
-  border-top-right-radius: 0.875rem;
+  background: var(--kpi-accent, #2563EB);
+  opacity: 0.95;
+  border-top-left-radius: 1rem;
+  border-top-right-radius: 1rem;
   transition: height 0.2s ease, opacity 0.2s ease;
 }
 
@@ -171,10 +171,10 @@
 
 /* Glass Surface with Backdrop Filter */
 .glass-surface {
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(226, 232, 240, 0.8);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(226, 232, 240, 0.9);
 }
 
 .glass-surface-dark {

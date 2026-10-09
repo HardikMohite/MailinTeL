@@ -343,6 +343,19 @@ class DispositionService:
             except Exception as e:
                 logger.debug(f"Could not cache hot IOC {ioc}: {e}")
 
+        # Broadcast live notification across active WebSocket connections
+        try:
+            from app.api.v1.endpoints.notifications_ws import notification_manager
+            await notification_manager.broadcast({
+                "type": "DISPOSITION",
+                "title": f"Analyst Disposition: {verdict.replace('_', ' ')}",
+                "message": f"Case {str(email_id)[:8]} disposition set by {reviewer_name}. Model feedback vectorized.",
+                "severity": "critical" if "PHISHING" in verdict else ("high" if "BEC" in verdict else "info"),
+                "data": {"email_id": str(email_id), "verdict": verdict, "analyst": reviewer_name}
+            })
+        except Exception as ws_err:
+            logger.debug(f"Could not broadcast disposition over WebSocket: {ws_err}")
+
         return {
             "email_id": str(email_id),
             "verdict": verdict,

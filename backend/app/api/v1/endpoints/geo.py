@@ -110,6 +110,24 @@ class EmailGeoInfrastructureResponse(BaseModel):
     attribution_disclaimer: str
 
 
+class CampaignTransmissionPath(BaseModel):
+    email_id: str
+    email_subject: Optional[str] = None
+    sender_address: Optional[str] = None
+    sender_origin_ip: Optional[str] = None
+    sender_city: Optional[str] = None
+    sender_country: Optional[str] = None
+    sender_coords: List[float] = Field(default_factory=list)
+    recipient_address: Optional[str] = None
+    recipient_domain: Optional[str] = None
+    recipient_destination_ip: Optional[str] = None
+    recipient_city: Optional[str] = None
+    recipient_country: Optional[str] = None
+    recipient_coords: List[float] = Field(default_factory=list)
+    hops_count: int = 0
+    path_summary: str = ""
+
+
 class CampaignGeoInfrastructureResponse(BaseModel):
     campaign_id: str
     campaign_name: str
@@ -124,6 +142,9 @@ class CampaignGeoInfrastructureResponse(BaseModel):
     markers: List[GeoMarkerItem] = Field(default_factory=list)
     country_distribution: Dict[str, int] = Field(default_factory=dict)
     attribution_disclaimer: str
+    senders: List[Dict[str, Any]] = Field(default_factory=list)
+    receivers: List[Dict[str, Any]] = Field(default_factory=list)
+    transmission_paths: List[CampaignTransmissionPath] = Field(default_factory=list)
 
 
 class GlobalGeoInfrastructureResponse(BaseModel):

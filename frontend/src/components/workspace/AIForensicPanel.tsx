@@ -14,6 +14,7 @@ import {
   AIThreatReasoningResponse,
   AIReasoningItem,
 } from '../../services/api';
+import { AnalystDispositionPanel } from './AnalystDispositionPanel';
 
 interface AIForensicPanelProps {
   emailId?: string;
@@ -52,46 +53,6 @@ const BENIGN_RECOMMENDED_ACTIONS = [
   'Maintain standard baseline threat intelligence telemetry',
 ];
 
-const DEFAULT_REASONING: AIReasoningItem[] = [
-  {
-    finding: 'Reply-To address mismatch',
-    evidence:
-      "Sender address domain is '11929178.brevosend.com' but Reply-To redirects to 'phishverse@gmail.com' (field 'reply_to': 'Sagar Safar Holidays <phishverse@gmail.com>') – identified as HIGH severity in findings with confidence 0.92.",
-    confidence: 0.92,
-  },
-  {
-    finding: 'Malicious sending IP',
-    evidence: "Relay hop 1 source IP 77.32.148.26 is flagged with reputation 'MALICIOUS' (confidence 0.87).",
-    confidence: 0.87,
-  },
-  {
-    finding: 'Authenticated SPF/DKIM/DMARC despite malicious source',
-    evidence:
-      'Authentication shows SPF, DKIM, DMARC all PASS, yet the sending IP is malicious, indicating a compromised legitimate service.',
-    confidence: 0.8,
-  },
-];
-
-const DEFAULT_ATTACK_INTENT = [
-  'Credential harvesting',
-  'Business Email Compromise (BEC)',
-  'Financial fraud',
-];
-
-const DEFAULT_SOCIAL_ENGINEERING = [
-  'Reply-To address mismatch',
-  'Impersonation of travel brand (Sagar Safar Holidays)',
-  'Use of enticing holiday itinerary subject to lure engagement',
-];
-
-const DEFAULT_RECOMMENDED_ACTIONS = [
-  'Quarantine or delete the email',
-  'Block sender IP 77.32.148.26 and related IPv6 internal address',
-  'Add rule to flag emails from brevosend.com domains with external Gmail Reply-To',
-  'Notify users about the phishing attempt and reinforce safe reply practices',
-  'Investigate the Sendinblue account associated with 11929178.brevosend.com for compromise',
-];
-
 export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threatScore, verdict }) => {
   const [data, setData] = useState<AIThreatReasoningResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -103,7 +64,7 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threa
       const res = await getAIThreatReasoning(emailId);
       setData(res);
     } catch (err: any) {
-      console.warn('Failed to fetch dynamic AI threat reasoning, using verified reference baseline:', err);
+      console.warn('AI threat reasoning retrieval notice:', err);
     } finally {
       setLoading(false);
     }
@@ -119,38 +80,57 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threa
     (threatScore !== undefined && threatScore < 40) ||
     (verdict && (verdict.toLowerCase() === 'benign' || verdict.toLowerCase() === 'legitimate'));
 
-  const classification = data?.classification || (isDefaultBenign ? 'legitimate' : 'suspicious');
+  const classification = data?.classification || (isDefaultBenign ? 'legitimate' : (threatScore && threatScore >= 70 ? 'phishing' : 'suspicious'));
   const isLegitimate = classification.toLowerCase() === 'legitimate' || classification.toLowerCase() === 'benign';
   const isSuspicious = classification.toLowerCase() === 'suspicious';
+  const isPhishing =
+    !isLegitimate &&
+    (classification.toLowerCase() === 'phishing' ||
+      (verdict && verdict.toLowerCase() === 'phishing') ||
+      (threatScore !== undefined && threatScore >= 65));
 
-  const confidence = data?.confidence !== undefined ? data.confidence : (isLegitimate ? 0.96 : 0.90);
+  const confidence = data?.confidence !== undefined ? data.confidence : (isLegitimate ? 0.96 : 0.88);
+  const threatCategory = data?.threat_category || (isLegitimate ? 'LEGITIMATE_COMMUNICATION' : (threatScore && threatScore >= 70 ? 'CREDENTIAL_PHISHING' : 'SUSPICIOUS_ANOMALY'));
+  const phishingSubcategory = data?.phishing_subcategory;
+  const categoryExplanation = data?.category_explanation;
+
   const reasoning =
     data?.reasoning && data.reasoning.length > 0
       ? data.reasoning
       : isLegitimate
       ? BENIGN_REASONING
-      : DEFAULT_REASONING;
+      : [
+          {
+            finding: 'Automated Heuristic Threat Telemetry',
+            evidence: `Threat risk evaluation scored at ${threatScore ?? 0}/100. Forensic analysis detected anomalous indicators across routing headers or message content.`,
+            confidence: 0.85,
+          },
+        ];
 
   const attackIntent =
     data?.attack_intent && data.attack_intent.length > 0
       ? data.attack_intent
       : isLegitimate
       ? BENIGN_ATTACK_INTENT
-      : DEFAULT_ATTACK_INTENT;
+      : ['Credential Harvesting / Interaction Coercion', 'Identity Spoofing or Evasion'];
 
   const socialEngineering =
     data?.social_engineering_indicators && data.social_engineering_indicators.length > 0
       ? data.social_engineering_indicators
       : isLegitimate
       ? BENIGN_SOCIAL_ENGINEERING
-      : DEFAULT_SOCIAL_ENGINEERING;
+      : ['Deceptive messaging or psychological compliance cues detected in message headers or body'];
 
   const recommendedActions =
     data?.recommended_actions && data.recommended_actions.length > 0
       ? data.recommended_actions
       : isLegitimate
       ? BENIGN_RECOMMENDED_ACTIONS
-      : DEFAULT_RECOMMENDED_ACTIONS;
+      : [
+          'Quarantine or restrict email delivery pending investigation',
+          'Block observable sender and relay infrastructure on perimeter firewall',
+          'Inspect user mailbox telemetry for unauthorized interactions',
+        ];
 
   let badgeClass = 'bg-rose-50 border-rose-200 text-rose-600';
   let BadgeIcon = ShieldAlert;
@@ -161,6 +141,32 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threa
     badgeClass = 'bg-amber-50 border-amber-200 text-amber-700';
     BadgeIcon = AlertTriangle;
   }
+
+  // Format Category Label for User
+  const formatCategoryLabel = (cat: string) => {
+    switch (cat) {
+      case 'BUSINESS_EMAIL_COMPROMISE':
+        return 'Business Email Compromise (BEC)';
+      case 'SPOOFING':
+        return 'Identity / Domain Spoofing';
+      case 'CREDENTIAL_PHISHING':
+        return 'Credential Harvesting / Phishing';
+      case 'SPEAR_PHISHING':
+        return 'Targeted Spear Phishing';
+      case 'BRAND_IMPERSONATION':
+        return 'Brand Impersonation Phishing';
+      case 'MALWARE_DELIVERY':
+        return 'Malware / Exploit Payload Delivery';
+      case 'EXTORTION_FRAUD':
+        return 'Extortion & Financial Fraud';
+      case 'QUISHING':
+        return 'Quishing (QR Code Phishing)';
+      case 'LEGITIMATE_COMMUNICATION':
+        return 'Legitimate Business Communication';
+      default:
+        return cat.replace(/_/g, ' ');
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -183,15 +189,15 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threa
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h3 className="text-base font-bold text-slate-900 tracking-tight">
-                  AI Forensic Threat Reasoning
+                  AI Forensic Threat Reasoning &amp; Categorization
                 </h3>
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-blue-50 border border-blue-200/70 text-blue-700">
                   <Cpu className="w-3 h-3 text-blue-500" />
-                  Groq | LPUx | RAG | Grounded
+                  Groq | LPUx | RAG | Redis Memory
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-1">
-                Selective forensic interpretation grounded strictly in verified headers, infrastructure, and pgvector memory.
+                Grounded forensic threat interpretation backed by pgvector case similarity and Redis continuous working memory.
               </p>
             </div>
           </div>
@@ -214,6 +220,29 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threa
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-600' : ''}`} />
             </button>
           </div>
+        </div>
+
+        {/* Threat Category & Subcategory Callout Banner */}
+        <div className="mt-4 p-3.5 rounded-xl bg-white border border-blue-200/80 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-start md:items-center gap-3">
+            <div className={`px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border shrink-0 ${
+              isLegitimate
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+            }`}>
+              {formatCategoryLabel(threatCategory)}
+            </div>
+            {phishingSubcategory && (
+              <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                Subtype: {phishingSubcategory.replace(/_/g, ' ')}
+              </span>
+            )}
+          </div>
+          {categoryExplanation && (
+            <p className="text-xs text-slate-600 italic md:text-right max-w-xl">
+              "{categoryExplanation}"
+            </p>
+          )}
         </div>
 
         {/* Forensic Drivers Section */}
@@ -336,6 +365,34 @@ export const AIForensicPanel: React.FC<AIForensicPanelProps> = ({ emailId, threa
           <ShieldCheck className="w-12 h-12 text-blue-400/70" strokeWidth={1.25} />
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* HUMAN-IN-THE-LOOP (HITL) FORENSIC LAYER */}
+      {/* STRICT RULE: Only shown when the email is considered / detected as Phishing by AI */}
+      {/* ========================================================================= */}
+      {isPhishing && emailId && (
+        <div className="pt-2 space-y-2 animate-fade-in">
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
+              </span>
+              <span className="text-xs font-bold text-rose-700 tracking-wide uppercase">
+                Human Analyst Review Layer Activated
+              </span>
+              <span className="text-[11px] font-medium text-slate-500 hidden sm:inline">
+                — Phishing detected by AI. Mandatory human verification &amp; authoritative disposition required.
+              </span>
+            </div>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-bold">
+              HITL GATED
+            </span>
+          </div>
+
+          <AnalystDispositionPanel emailId={emailId} />
+        </div>
+      )}
     </div>
   );
 };

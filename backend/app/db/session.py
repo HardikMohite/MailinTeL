@@ -35,7 +35,7 @@ def get_engine_connect_args() -> Dict[str, Any]:
         args["prepared_statement_cache_size"] = 0
 
     # Set resilient connection and command timeouts for cloud network transit
-    args["timeout"] = 15.0
+    args["timeout"] = 35.0
     args["command_timeout"] = 60.0
 
     return args
@@ -47,10 +47,10 @@ _engine_kwargs: Dict[str, Any] = {
     "connect_args": get_engine_connect_args(),
     "echo": False,
     "future": True,
-    "pool_size": 15,
-    "max_overflow": 25,
-    "pool_timeout": 30,
-    "pool_recycle": 120,  # Recycle before Supavisor / PgBouncer drops idle sockets
+    "pool_size": 10,
+    "max_overflow": 10,
+    "pool_timeout": 45,
+    "pool_recycle": 300,  # Recycle before Supavisor / PgBouncer drops idle sockets
     "pool_pre_ping": False,  # Avoids 400ms pre-ping overhead on every query
 }
 

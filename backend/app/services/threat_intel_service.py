@@ -177,20 +177,93 @@ async def enrich_email_threat_intelligence(
     deduped_iocs = list(dict.fromkeys(iocs_to_enrich))
 
     results: List[AggregatedThreatIntel] = []
-    # Sequential persistence avoids concurrent session corruption and flush collisions
+    intel_engine = engine or ThreatIntelEngine()
+    now_ts = time.time()
+    now_utc = datetime.now(timezone.utc)
+
+    # 1. Fast in-memory cache check (0ms)
+    uncached_iocs: List[Tuple[str, str]] = []
     for i_type, i_val in deduped_iocs:
-        try:
-            agg = await enrich_and_persist_indicator(
-                indicator_type=i_type,
-                indicator_value=i_val,
-                db=db,
-                email_id=email_id,
-                engine=engine,
-                auto_commit=False,
-            )
+        cache_key = f"{i_type.strip().upper()}:{i_val.strip().lower()}"
+        cached = _IOC_CACHE.get(cache_key)
+        if cached and (now_ts - cached[0]) < _IOC_CACHE_TTL_SECONDS:
+            results.append(cached[1])
+        else:
+            uncached_iocs.append((i_type, i_val))
+
+    if uncached_iocs:
+        # 2. Concurrently resolve uncached IOCs using asyncio.gather with semaphore
+        sem = asyncio.Semaphore(6)
+
+        async def _query_ioc_safe(item: Tuple[str, str]) -> Tuple[str, str, Optional[AggregatedThreatIntel]]:
+            t, v = item
+            async with sem:
+                try:
+                    agg = await asyncio.wait_for(
+                        intel_engine.query_indicator(t, v),
+                        timeout=3.0,
+                    )
+                    return (t, v, agg)
+                except Exception as exc:
+                    logger.debug(f"Threat intel query timed out for {t} {v}: {exc}")
+                    return (t, v, None)
+
+        query_tasks = [_query_ioc_safe(item) for item in uncached_iocs]
+        query_results = await asyncio.gather(*query_tasks)
+
+        for i_type, i_val, agg in query_results:
+            if not agg:
+                continue
+            clean_type = i_type.strip().upper()
+            clean_val = i_val.strip()
+            cache_key = f"{clean_type}:{clean_val.lower()}"
             results.append(agg)
-        except Exception as e:
-            logger.warning(f"Error enriching IOC ({i_type}, {i_val}) for email {email_id}: {e}")
+            _IOC_CACHE[cache_key] = (now_ts, agg)
+
+            try:
+                # Find or create indicator in DB
+                stmt = select(ThreatIndicator).where(
+                    ThreatIndicator.indicator_type == clean_type,
+                    ThreatIndicator.normalized_value == clean_val,
+                )
+                res = await db.execute(stmt)
+                indicator_rec = res.scalar_one_or_none()
+
+                if not indicator_rec:
+                    indicator_rec = ThreatIndicator(
+                        id=uuid.uuid4(),
+                        indicator_type=clean_type,
+                        normalized_value=clean_val,
+                        reputation=agg.consensus_verdict,
+                        confidence=agg.consensus_confidence,
+                        status="ACTIVE",
+                        first_seen_at=now_utc,
+                        last_seen_at=now_utc,
+                        created_at=now_utc,
+                    )
+                    db.add(indicator_rec)
+                    await db.flush()
+                else:
+                    indicator_rec.reputation = agg.consensus_verdict
+                    indicator_rec.confidence = agg.consensus_confidence
+                    indicator_rec.last_seen_at = now_utc
+
+                if email_id and indicator_rec:
+                    sighting = IndicatorSighting(
+                        id=uuid.uuid4(),
+                        indicator_id=indicator_rec.id,
+                        email_id=email_id,
+                        observed_at=now_utc,
+                        context={
+                            "consensus_verdict": agg.consensus_verdict,
+                            "threat_score": agg.consensus_threat_score,
+                            "tags": agg.aggregated_tags,
+                            "provider_count": agg.provider_count,
+                        },
+                    )
+                    db.add(sighting)
+            except Exception as e:
+                logger.debug(f"Error persisting indicator {clean_val}: {e}")
 
     # Commit all sightings and indicator records in a single fast transaction
     await db.commit()

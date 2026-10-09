@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tasks import job_manager, JobStage
 from app.db.session import async_session_maker
+from app.models.emails import Email
 from app.services.scoring_service import execute_email_analysis_and_scoring
 from app.services.threat_intel_service import enrich_email_threat_intelligence
 from app.services.dna_service import generate_and_persist_email_dna
@@ -51,8 +52,10 @@ async def _run_dna_generation(session: AsyncSession, email_id: uuid.UUID) -> Any
 
 async def _run_similarity(session: AsyncSession, email_id: uuid.UUID) -> Any:
     # Generates embeddings first (if missing) then links semantically similar emails.
+    email_obj = await session.get(Email, email_id)
+    org_id = email_obj.organization_id if email_obj else None
     return await default_similarity_service.find_and_link_similar_emails(
-        session=session, email_id=email_id
+        session=session, email_id=email_id, organization_id=org_id
     )
 
 
@@ -61,7 +64,11 @@ async def _run_geolocation(session: AsyncSession, email_id: uuid.UUID) -> Any:
 
 
 async def _run_campaign_correlation(session: AsyncSession, email_id: uuid.UUID) -> Any:
-    return await default_campaign_service.correlate_email(session=session, email_id=email_id)
+    email_obj = await session.get(Email, email_id)
+    org_id = email_obj.organization_id if email_obj else None
+    return await default_campaign_service.correlate_email(
+        session=session, email_id=email_id, organization_id=org_id
+    )
 
 
 # Ordered pipeline stages. Each stage owns its own DB session/transaction and is
@@ -136,27 +143,18 @@ async def run_full_email_analysis_pipeline(job_id: str, email_id: str) -> Dict[s
         else:
             summary["stages_completed"].append(label)
 
-    # 4. Phase 3: Semantic Similarity & Vector Links
+    # 4. Phase 3: Concurrent Semantic Similarity & Campaign Correlation
     await job_manager.update_progress(job_id, JobStage.GEO_LOCATING, 75)
-    try:
-        async with async_session_maker() as session:
-            await _run_similarity(session, email_uuid)
-            await session.commit()
-        summary["stages_completed"].append("semantic_similarity")
-    except Exception as exc:
-        logger.exception(f"Similarity linking failed for {email_id}: {exc}")
-        summary["stages_failed"].append({"stage": "semantic_similarity", "error": str(exc)})
-
-    # 5. Phase 4: Campaign Correlation
-    await job_manager.update_progress(job_id, JobStage.CORRELATING_CAMPAIGN, 90)
-    try:
-        async with async_session_maker() as session:
-            await _run_campaign_correlation(session, email_uuid)
-            await session.commit()
-        summary["stages_completed"].append("campaign_correlation")
-    except Exception as exc:
-        logger.exception(f"Campaign correlation failed for {email_id}: {exc}")
-        summary["stages_failed"].append({"stage": "campaign_correlation", "error": str(exc)})
+    phase3_tasks = [
+        _safe_run("semantic_similarity", _run_similarity),
+        _safe_run("campaign_correlation", _run_campaign_correlation),
+    ]
+    phase3_results = await asyncio.gather(*phase3_tasks)
+    for label, err in phase3_results:
+        if err:
+            summary["stages_failed"].append({"stage": label, "error": err})
+        else:
+            summary["stages_completed"].append(label)
 
     # Invalidate all caches across panels so next views reflect updated pipeline findings
     try:

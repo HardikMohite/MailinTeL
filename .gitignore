@@ -91,3 +91,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Scratch & Temporary Testing Scripts
+scratch_*.py
+**/scratch_*.py
+scratch/

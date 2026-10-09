@@ -1,5 +1,6 @@
 import uuid
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,81 +25,95 @@ async def extract_and_persist_artifacts(
 ) -> EmailArtifactBundle:
     """
     Extracts URLs, Domains, IPs, and Attachments from raw RFC822 bytes,
-    persists intelligence records in PostgreSQL, stores attachment evidence in MinIO,
-    and returns the structured artifact bundle.
+    persists intelligence records in PostgreSQL in high-performance batches,
+    stores attachment evidence concurrently in MinIO, and returns the structured bundle.
     """
     extractor = EmailArtifactExtractor()
     bundle = extractor.extract_artifacts(raw_eml_bytes=raw_bytes)
     now_utc = datetime.now(timezone.utc)
 
-    # 1. Persist Domains (Upsert / Find Existing)
+    # 1. Batch Persist Domains (Upsert / Find Existing)
     domain_id_map: Dict[str, uuid.UUID] = {}
-    for d in bundle.domains:
-        domain_stmt = select(Domain).where(Domain.normalized_domain == d.domain)
+    if bundle.domains:
+        domain_names = [d.domain for d in bundle.domains]
+        domain_stmt = select(Domain).where(Domain.normalized_domain.in_(domain_names))
         res = await db.execute(domain_stmt)
-        existing_domain = res.scalar_one_or_none()
+        for dom in res.scalars().all():
+            domain_id_map[dom.normalized_domain] = dom.id
 
-        if existing_domain:
-            domain_id_map[d.domain] = existing_domain.id
-        else:
-            new_domain = Domain(
-                id=uuid.uuid4(),
-                normalized_domain=d.domain,
-                root_domain=d.root_domain,
-                first_seen_at=now_utc,
-                created_at=now_utc,
-                updated_at=now_utc,
-            )
-            db.add(new_domain)
-            domain_id_map[d.domain] = new_domain.id
+        new_domains = []
+        for d in bundle.domains:
+            if d.domain not in domain_id_map:
+                nid = uuid.uuid4()
+                new_domains.append(Domain(
+                    id=nid,
+                    normalized_domain=d.domain,
+                    root_domain=d.root_domain,
+                    first_seen_at=now_utc,
+                    created_at=now_utc,
+                    updated_at=now_utc,
+                ))
+                domain_id_map[d.domain] = nid
+        if new_domains:
+            db.add_all(new_domains)
 
-    # 2. Persist URLs & EmailURL Associations
-    # Clear previous email_urls for idempotent re-analysis
+    # 2. Batch Persist URLs & EmailURL Associations
     await db.execute(delete(EmailURL).where(EmailURL.email_id == email_id))
 
-    for u in bundle.urls:
-        url_stmt = select(URL).where(URL.url_hash == u.url_hash)
-        res = await db.execute(url_stmt)
-        existing_url = res.scalar_one_or_none()
+    if bundle.urls:
+        url_hashes = [u.url_hash for u in bundle.urls]
+        existing_urls_stmt = select(URL).where(URL.url_hash.in_(url_hashes))
+        url_res = await db.execute(existing_urls_stmt)
+        url_id_map: Dict[str, uuid.UUID] = {u.url_hash: u.id for u in url_res.scalars().all()}
 
-        if existing_url:
-            url_id = existing_url.id
-        else:
-            d_id = domain_id_map.get(u.domain) if u.domain else None
-            new_url = URL(
-                id=uuid.uuid4(),
-                normalized_url=u.normalized_url,
-                url_hash=u.url_hash,
-                domain_id=d_id,
-                first_seen_at=now_utc,
+        new_urls = []
+        email_url_links = []
+        for u in bundle.urls:
+            if u.url_hash in url_id_map:
+                url_id = url_id_map[u.url_hash]
+            else:
+                d_id = domain_id_map.get(u.domain) if u.domain else None
+                url_id = uuid.uuid4()
+                new_urls.append(URL(
+                    id=url_id,
+                    normalized_url=u.normalized_url,
+                    url_hash=u.url_hash,
+                    domain_id=d_id,
+                    first_seen_at=now_utc,
+                    created_at=now_utc,
+                ))
+                url_id_map[u.url_hash] = url_id
+
+            email_url_links.append(EmailURL(
+                email_id=email_id,
+                url_id=url_id,
+                context=u.context,
                 created_at=now_utc,
-            )
-            db.add(new_url)
-            url_id = new_url.id
+            ))
+        if new_urls:
+            db.add_all(new_urls)
+        if email_url_links:
+            db.add_all(email_url_links)
 
-        # Add association
-        email_url_link = EmailURL(
-            email_id=email_id,
-            url_id=url_id,
-            context=u.context,
-            created_at=now_utc,
-        )
-        db.add(email_url_link)
+    # 3. Batch Persist IP Addresses
+    if bundle.ip_addresses:
+        ip_strs = [ip.ip_address for ip in bundle.ip_addresses]
+        existing_ips_stmt = select(IPAddress.ip_address).where(IPAddress.ip_address.in_(ip_strs))
+        ip_res = await db.execute(existing_ips_stmt)
+        existing_ip_set = set(ip_res.scalars().all())
 
-    # 3. Persist IP Addresses
-    for ip in bundle.ip_addresses:
-        ip_stmt = select(IPAddress).where(IPAddress.ip_address == ip.ip_address)
-        res = await db.execute(ip_stmt)
-        existing_ip = res.scalar_one_or_none()
-
-        if not existing_ip:
-            new_ip = IPAddress(
-                id=uuid.uuid4(),
-                ip_address=ip.ip_address,
-                first_seen_at=now_utc,
-                created_at=now_utc,
-            )
-            db.add(new_ip)
+        new_ips = []
+        for ip in bundle.ip_addresses:
+            if ip.ip_address not in existing_ip_set:
+                new_ips.append(IPAddress(
+                    id=uuid.uuid4(),
+                    ip_address=ip.ip_address,
+                    first_seen_at=now_utc,
+                    created_at=now_utc,
+                ))
+                existing_ip_set.add(ip.ip_address)
+        if new_ips:
+            db.add_all(new_ips)
 
     # 4. Persist Attachments as Evidence Objects
     # Clear previous attachments for this email
@@ -120,31 +135,37 @@ async def extract_and_persist_artifacts(
     parent_evidence = parent_res.scalar_one_or_none()
     parent_id = parent_evidence.id if parent_evidence else None
 
+    # Parallel MinIO uploads for all attachments
+    async def _upload_attachment_async(att_obj, obj_key):
+        if storage.client is not None and att_obj.raw_payload_bytes:
+            try:
+                await asyncio.to_thread(
+                    storage.upload_evidence_object,
+                    bucket_name=settings.MINIO_DERIVED_BUCKET,
+                    object_key=obj_key,
+                    data=att_obj.raw_payload_bytes,
+                    content_type=att_obj.content_type,
+                    metadata={
+                        "email_id": str(email_id),
+                        "filename": att_obj.filename,
+                        "sha256": att_obj.sha256_hash,
+                        "md5": att_obj.md5_hash,
+                        "size_bytes": str(att_obj.size_bytes),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Could not upload attachment {att_obj.filename} to MinIO: {e}")
+
+    upload_tasks = []
+    att_evidence_list = []
+    custody_events_list = []
+
     for att in bundle.attachments:
         att_id = uuid.uuid4()
         object_key = f"derived/attachments/{now_utc.year}/{now_utc.month:02d}/{att_id}_{att.filename}"
+        upload_tasks.append(_upload_attachment_async(att, object_key))
 
-        # Upload binary attachment to MinIO
-        try:
-            if storage.client is not None and att.raw_payload_bytes:
-                storage.upload_evidence_object(
-                    bucket_name=settings.MINIO_DERIVED_BUCKET,
-                    object_key=object_key,
-                    data=att.raw_payload_bytes,
-                    content_type=att.content_type,
-                    metadata={
-                        "email_id": str(email_id),
-                        "filename": att.filename,
-                        "sha256": att.sha256_hash,
-                        "md5": att.md5_hash,
-                        "size_bytes": str(att.size_bytes),
-                    },
-                )
-        except Exception as e:
-            logger.warning(f"Could not upload attachment {att.filename} to MinIO: {e}")
-
-        # Store EvidenceObject
-        att_evidence = EvidenceObject(
+        att_evidence_list.append(EvidenceObject(
             id=att_id,
             email_id=email_id,
             parent_evidence_id=parent_id,
@@ -161,11 +182,9 @@ async def extract_and_persist_artifacts(
             immutable=True,
             retention_status="ACTIVE",
             created_at=now_utc,
-        )
-        db.add(att_evidence)
+        ))
 
-        # Custody event
-        custody = CustodyEvent(
+        custody_events_list.append(CustodyEvent(
             evidence_id=att_id,
             event_type="ACQUIRED",
             event_at=now_utc,
@@ -178,8 +197,16 @@ async def extract_and_persist_artifacts(
                 "is_dangerous": att.is_dangerous,
             },
             created_at=now_utc,
-        )
-        db.add(custody)
+        ))
+
+    # Execute all MinIO attachment uploads concurrently in thread pool
+    if upload_tasks:
+        await asyncio.gather(*upload_tasks)
+
+    if att_evidence_list:
+        db.add_all(att_evidence_list)
+    if custody_events_list:
+        db.add_all(custody_events_list)
 
     await db.commit()
 

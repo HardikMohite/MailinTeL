@@ -43,6 +43,7 @@ class CurrentUser:
     organization_id: Optional[uuid.UUID]
     organization_name: Optional[str]
     role_code: str
+    username: Optional[str] = None
 
 
 # High-speed two-tier caching (L1 Memory + L2 Redis) for authenticated identities.
@@ -63,6 +64,7 @@ def cache_user_auth(user: "CurrentUser") -> None:
         user_dict = {
             "id": uid_str,
             "email": user.email,
+            "username": user.username,
             "full_name": user.full_name,
             "organization_id": str(user.organization_id) if user.organization_id else None,
             "organization_name": user.organization_name,
@@ -118,6 +120,7 @@ async def get_current_user(
                 current_user = CurrentUser(
                     id=uuid.UUID(r_user["id"]),
                     email=r_user["email"],
+                    username=r_user.get("username"),
                     full_name=r_user.get("full_name"),
                     organization_id=uuid.UUID(r_user["organization_id"]) if r_user.get("organization_id") else None,
                     organization_name=r_user.get("organization_name"),
@@ -170,6 +173,7 @@ async def get_current_user(
     current_user = CurrentUser(
         id=user.id,
         email=user.email,
+        username=getattr(user, "username", None),
         full_name=user.full_name,
         organization_id=org_id,
         organization_name=org_name,
@@ -182,6 +186,7 @@ async def get_current_user(
             user_dict = {
                 "id": uid_str,
                 "email": current_user.email,
+                "username": current_user.username,
                 "full_name": current_user.full_name,
                 "organization_id": str(current_user.organization_id) if current_user.organization_id else None,
                 "organization_name": current_user.organization_name,
@@ -319,11 +324,19 @@ async def get_authorized_email(
     # reach emails it personally uploaded — see ANALYST_ROLES/ADMIN_ROLES.
     # Ownership is EmailSource.user_id, the uploader. Anyone in
     # ANALYST_ROLES (which already includes INSTITUTION_ADMIN/SYSTEM_ADMIN)
-    # keeps full org-wide visibility.
+    # keeps full org-wide visibility for threats.
+    is_owner = source_obj is not None and source_obj.user_id == current_user.id
     if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
-        source_user_id = source_obj.user_id if source_obj else None
-        if source_user_id is None or source_user_id != current_user.id:
+        if not is_owner:
             raise not_found
+
+    # DATA PRIVACY ENFORCEMENT:
+    # Real / benign personal communications (NORMAL, SAFE, BENIGN) are strictly confidential
+    # to the employee uploader. Org Managers, System Admins, and Cyber Cell Investigators
+    # are restricted to phishing / threat data and cannot inspect benign communications.
+    is_benign = email_obj.qualification_status in ["NORMAL", "SAFE", "BENIGN"]
+    if not is_owner and is_benign:
+        raise not_found
 
     if current_user.role_code in CROSS_ORG_ROLES and source_org_id != current_user.organization_id:
         from app.core.audit import record_audit
@@ -369,27 +382,8 @@ async def get_authorized_campaign(
             raise not_found
     else:
         # System-level, global cluster, or seeded campaign with null organization_id.
-        # Allow analyst and admin roles to inspect it.
+        # Allow analyst, admin, and cross-org roles to inspect it.
         if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
-            raise not_found
-
-    # SCOPING: a plain USER account may only reach a campaign if it
-    # contains at least one email that user personally uploaded ("their
-    # campaigns"). Analyst/admin roles (ANALYST_ROLES) see every campaign
-    # in the organization, including the full cross-email correlation.
-    if current_user.role_code not in ANALYST_ROLES and current_user.role_code not in CROSS_ORG_ROLES:
-        owns_stmt = (
-            select(CampaignMembership.id)
-            .join(Email, Email.id == CampaignMembership.email_id)
-            .join(EmailSource, EmailSource.id == Email.source_id)
-            .where(
-                CampaignMembership.campaign_id == campaign_id,
-                EmailSource.user_id == current_user.id,
-            )
-            .limit(1)
-        )
-        owns_result = await db.execute(owns_stmt)
-        if owns_result.first() is None:
             raise not_found
 
     if current_user.role_code in CROSS_ORG_ROLES and campaign.organization_id != current_user.organization_id:

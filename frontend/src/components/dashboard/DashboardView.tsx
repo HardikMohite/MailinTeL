@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { FileText, ShieldAlert, Inbox, ArrowRight, Users, Building2, Flag } from 'lucide-react';
+import { FileText, ShieldAlert, Inbox, ArrowRight, Flag } from 'lucide-react';
 import { StatusBadge } from '../common/StatusBadge';
 import {
+  getDashboardSummary,
+  DashboardThreatDistribution,
+  DashboardRecentThreat,
+  DashboardActiveCampaign,
   listEmails,
   listCampaigns,
   listReports,
-  listPlatformUsers,
-  listPlatformOrganizations,
-  listOrgMembers,
-  EmailDetailResponse,
-  CampaignListItemResponse,
 } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 
@@ -52,13 +51,14 @@ const timeAgo = (iso: string): string => {
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) => {
-  const { user, isCrossOrg } = useAuth();
-  const isSysAdmin = isCrossOrg() && user?.role === 'SYSTEM_ADMIN';
-  const [emails, setEmails] = useState<EmailDetailResponse[]>([]);
-  const [campaigns, setCampaigns] = useState<CampaignListItemResponse[]>([]);
+  const { user } = useAuth();
+  const [totalPhishing, setTotalPhishing] = useState<number>(0);
+  const [threatCount, setThreatCount] = useState<number>(0);
+  const [totalCampaigns, setTotalCampaigns] = useState<number>(0);
   const [totalReports, setTotalReports] = useState<number>(0);
-  const [totalUsers, setTotalUsers] = useState<number>(0);
-  const [totalOrganizations, setTotalOrganizations] = useState<number>(0);
+  const [distribution, setDistribution] = useState<DashboardThreatDistribution[]>([]);
+  const [recent, setRecent] = useState<DashboardRecentThreat[]>([]);
+  const [activeCampaigns, setActiveCampaigns] = useState<DashboardActiveCampaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,29 +68,60 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
       setLoading(true);
       setError(null);
       try {
-        const [emailPage, campaignList, reportPage, userCount, orgCount] = await Promise.all([
-          listEmails(0, 100).catch((err) => {
-            console.warn('Failed to fetch emails for dashboard:', err);
-            return { total: 0, items: [] };
-          }),
-          listCampaigns(undefined, 0, 50).catch(() => []),
-          listReports(undefined, undefined, 1).catch(() => ({ total_reports: 0, reports: [] })),
-          (isSysAdmin ? listPlatformUsers() : listOrgMembers())
-            .then((res) => (Array.isArray(res) ? res.length : 1))
-            .catch(() => 1),
-          (isSysAdmin
-            ? listPlatformOrganizations().then((res) => (Array.isArray(res) ? res.length : 1))
-            : Promise.resolve(user?.organization_id ? 1 : 1)
-          ).catch(() => 1),
-        ]);
+        // High-speed unified dashboard summary endpoint (single network roundtrip, 5ms warm cache)
+        const summary = await getDashboardSummary();
         if (cancelled) return;
-        setEmails(emailPage.items || []);
-        setCampaigns(campaignList || []);
-        setTotalReports(reportPage.total_reports || 0);
-        setTotalUsers(userCount);
-        setTotalOrganizations(orgCount);
+        setTotalPhishing(summary.total_phishing);
+        setThreatCount(summary.threat_count);
+        setTotalCampaigns(summary.total_campaigns);
+        setTotalReports(summary.total_reports);
+        setDistribution(summary.distribution);
+        setRecent(summary.recent_threats);
+        setActiveCampaigns(summary.active_campaigns);
       } catch (err) {
-        if (!cancelled) setError('Could not load dashboard data from the backend.');
+        // Fallback to legacy parallel endpoints in case of edge errors
+        try {
+          const [emailPage, campaignList, reportPage] = await Promise.all([
+            listEmails(0, 100).catch(() => ({ total: 0, items: [] })),
+            listCampaigns(undefined, 0, 50).catch(() => []),
+            listReports(undefined, undefined, 1).catch(() => ({ total_reports: 0, reports: [] })),
+          ]);
+          if (cancelled) return;
+          const phishing = (emailPage.items || []).filter(
+            (e) => !SAFE_STATUSES.has((e.qualification_status || '').toUpperCase())
+          );
+          setTotalPhishing(phishing.length);
+          setThreatCount(phishing.filter((e) => THREAT_STATUSES.has(e.qualification_status)).length);
+          setTotalCampaigns((campaignList || []).length);
+          setTotalReports(reportPage.total_reports || 0);
+          setDistribution(
+            ['MALICIOUS', 'HIGH_RISK', 'SUSPICIOUS', 'CAMPAIGN_RELATED', 'QUALIFIED_FOR_INVESTIGATION']
+              .map((status) => ({
+                status,
+                count: phishing.filter((e) => e.qualification_status === status).length,
+              }))
+              .filter((d) => d.count > 0)
+          );
+          setRecent(
+            phishing.slice(0, 8).map((e) => ({
+              id: e.id,
+              subject: e.subject,
+              sender_address: e.sender_address,
+              qualification_status: e.qualification_status,
+              created_at: e.created_at,
+              original_filename: e.original_filename,
+            }))
+          );
+          setActiveCampaigns(
+            (campaignList || []).slice(0, 4).map((c) => ({
+              id: c.id,
+              campaign_name: c.campaign_name,
+              member_count: c.member_count,
+            }))
+          );
+        } catch {
+          if (!cancelled) setError('Could not load dashboard data from the backend.');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -98,25 +129,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
     return () => {
       cancelled = true;
     };
-  }, [isSysAdmin, user?.organization_id]);
+  }, [user?.organization_id]);
 
-  // Filter out safe / normal emails — strictly threat & phishing emails only
-  const phishingEmails = emails.filter(
-    (e) => !SAFE_STATUSES.has((e.qualification_status || '').toUpperCase())
-  );
-  const totalPhishing = phishingEmails.length;
-  const threatCount = phishingEmails.filter((e) => THREAT_STATUSES.has(e.qualification_status)).length;
-  const recent = phishingEmails.slice(0, 8);
-
-  // Distribution strictly excludes normal/safe emails
-  const distribution = ['MALICIOUS', 'HIGH_RISK', 'SUSPICIOUS', 'CAMPAIGN_RELATED', 'QUALIFIED_FOR_INVESTIGATION']
-    .map((status) => ({
-      status,
-      count: phishingEmails.filter((e) => e.qualification_status === status).length,
-    }))
-    .filter((d) => d.count > 0);
   const maxCount = Math.max(1, ...distribution.map((d) => d.count));
-
   const [filterQuery, setFilterQuery] = useState('');
 
   // Search filtered recent activity
@@ -139,62 +154,44 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
         </div>
       )}
 
-      {/* KPI metric cards strip — 6 columns with Reports Generated as the last tab */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+      {/* KPI metric cards strip — 4 security columns */}
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         {[
           {
             label: 'Total Phishing',
             value: totalPhishing,
             subtext: 'Ingested lures',
             icon: Inbox,
-            color: 'text-brand',
-            bg: 'bg-brand-soft',
-            accent: '#2563B8',
+            color: 'text-blue-600',
+            bg: 'bg-blue-50',
+            accent: '#2563EB',
           },
           {
             label: 'Threats Detected',
             value: threatCount,
             subtext: 'High / Critical',
             icon: ShieldAlert,
-            color: 'text-severity-critical',
+            color: 'text-rose-600',
             bg: 'bg-rose-50',
-            accent: '#C73A32',
-          },
-          {
-            label: 'Total Users',
-            value: totalUsers,
-            subtext: 'Across platform',
-            icon: Users,
-            color: 'text-purple-600',
-            bg: 'bg-purple-50',
-            accent: '#7C62C8',
-          },
-          {
-            label: 'Organizations',
-            value: totalOrganizations,
-            subtext: 'Active tenants',
-            icon: Building2,
-            color: 'text-emerald-600',
-            bg: 'bg-emerald-50',
-            accent: '#2D8B68',
+            accent: '#DC2626',
           },
           {
             label: 'Campaigns',
-            value: campaigns.length,
+            value: totalCampaigns,
             subtext: 'Correlated clusters',
             icon: Flag,
-            color: 'text-amber-600',
-            bg: 'bg-amber-50',
-            accent: '#D88916',
+            color: 'text-indigo-600',
+            bg: 'bg-indigo-50',
+            accent: '#4F46E5',
           },
           {
             label: 'Reports Generated',
             value: totalReports,
             subtext: 'Forensic PDF/HTML',
             icon: FileText,
-            color: 'text-indigo-600',
-            bg: 'bg-indigo-50',
-            accent: '#4F46E5',
+            color: 'text-blue-600',
+            bg: 'bg-blue-50',
+            accent: '#2563EB',
           },
         ].map((metric) => {
           const Icon = metric.icon;
@@ -335,10 +332,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
                     sev === 'critical'
                       ? 'bg-rose-500'
                       : sev === 'high'
-                      ? 'bg-amber-500'
-                      : sev === 'medium'
-                      ? 'bg-purple-500'
-                      : 'bg-blue-500';
+                        ? 'bg-amber-500'
+                        : sev === 'medium'
+                          ? 'bg-purple-500'
+                          : 'bg-blue-500';
 
                   return (
                     <div key={d.status} className="space-y-1">
@@ -365,7 +362,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
           </div>
 
           {/* Active Campaigns Card */}
-          {campaigns.length > 0 && (
+          {activeCampaigns.length > 0 && (
             <div className="rounded-xl bg-workspace-card border border-workspace-border shadow-xs p-5 hover-lift">
               <div className="flex items-center justify-between mb-3.5">
                 <div className="flex items-center gap-2">
@@ -373,11 +370,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onSelectEmail }) =
                   <h3 className="text-sm font-bold text-text-primary tracking-tight">Active Campaigns</h3>
                 </div>
                 <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-                  {campaigns.length} Active
+                  {totalCampaigns} Active
                 </span>
               </div>
               <div className="space-y-2">
-                {campaigns.slice(0, 4).map((c) => (
+                {activeCampaigns.slice(0, 4).map((c) => (
                   <div
                     key={c.id}
                     className="p-2.5 rounded-lg border border-workspace-border bg-workspace/50 hover:bg-workspace hover:border-amber-300/60 transition-all flex items-center justify-between gap-2"

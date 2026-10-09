@@ -79,29 +79,31 @@ async def analyze_and_persist_headers(
     await db.execute(delete(RelayHop).where(RelayHop.email_id == email_id))
     await db.execute(delete(EmailAuthenticationResult).where(EmailAuthenticationResult.email_id == email_id))
 
-    # 4. Insert RelayHop records
-    for hop in parsed_hops:
-        hop_record = RelayHop(
-            id=uuid.uuid4(),
-            email_id=email_id,
-            sequence_number=hop.sequence_number,
-            source_host=hop.source_host,
-            source_ip=hop.source_ip,
-            destination_host=hop.destination_host,
-            observed_at=hop.observed_at,
-            reliability=hop.reliability,
-            evidence={
-                "protocol": hop.protocol,
-                "queue_id": hop.queue_id,
-                "envelope_to": hop.envelope_to,
-                "tls_info": hop.tls_info,
-                "raw_date_str": hop.raw_date_str,
-                "transit_delay_seconds": hop.transit_delay_seconds,
-                "raw_header": hop.raw_header,
-            },
-            created_at=now_utc,
-        )
-        db.add(hop_record)
+    # 4. Batch insert RelayHop records
+    if parsed_hops:
+        db.add_all([
+            RelayHop(
+                id=uuid.uuid4(),
+                email_id=email_id,
+                sequence_number=hop.sequence_number,
+                source_host=hop.source_host,
+                source_ip=hop.source_ip,
+                destination_host=hop.destination_host,
+                observed_at=hop.observed_at,
+                reliability=hop.reliability,
+                evidence={
+                    "protocol": hop.protocol,
+                    "queue_id": hop.queue_id,
+                    "envelope_to": hop.envelope_to,
+                    "tls_info": hop.tls_info,
+                    "raw_date_str": hop.raw_date_str,
+                    "transit_delay_seconds": hop.transit_delay_seconds,
+                    "raw_header": hop.raw_header,
+                },
+                created_at=now_utc,
+            )
+            for hop in parsed_hops
+        ])
 
     # 5. Insert EmailAuthenticationResult record
     auth_record = EmailAuthenticationResult(

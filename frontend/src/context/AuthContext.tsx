@@ -24,7 +24,7 @@ interface AuthContextValue {
    * again. Cleared as soon as a new session is established.
    */
   sessionMessage: string | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (emailOrUsername: string, password: string) => Promise<void>;
   register: (payload: RegisterPayload) => Promise<void>;
   logout: () => void;
   clearSessionMessage: () => void;
@@ -58,8 +58,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = useCallback(
-    async (email: string, password: string) => {
-      const payload: LoginPayload = { email, password };
+    async (emailOrUsername: string, password: string) => {
+      const payload: LoginPayload = {
+        identifier: emailOrUsername,
+        email: emailOrUsername,
+        password,
+      };
       const response = await loginAccount(payload);
       applySession(response);
     },

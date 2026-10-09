@@ -95,7 +95,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onSw
             <button
               type="submit"
               disabled={isSubmitting || !email.trim()}
-              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-brand to-[#1D4E9E] hover:from-[#1D4E9E] hover:to-[#163E80] disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-4 rounded-xl shadow-sm hover:shadow-md hover:shadow-brand/20 active:scale-[0.99] transition-all"
+              className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-semibold py-3 px-4 rounded-xl shadow-md shadow-blue-500/25 active:scale-[0.99] transition-all cursor-pointer"
             >
               {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
               {isSubmitting ? 'Sending instructions…' : 'Send reset instructions'}
@@ -123,7 +123,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onSw
 
           <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 mb-6 text-left">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-1">
-              <Mail className="w-3.5 h-3.5 text-brand" />
+              <Mail className="w-3.5 h-3.5 text-blue-600" />
               <span>Security Reminder</span>
             </div>
             <p className="text-[11px] text-slate-500 leading-relaxed">
@@ -135,7 +135,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onSw
             <button
               type="button"
               onClick={onSwitchToLogin}
-              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-brand to-[#1D4E9E] hover:from-[#1D4E9E] hover:to-[#163E80] text-white text-sm font-semibold py-2.5 px-4 rounded-xl shadow-sm hover:shadow-md transition-all"
+              className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold py-3 px-4 rounded-xl shadow-md shadow-blue-500/25 transition-all cursor-pointer"
             >
               Return to sign in
             </button>

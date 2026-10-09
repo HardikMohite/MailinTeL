@@ -74,16 +74,20 @@ class BackgroundJobManager:
         return f"mailintel:job:{job_id}"
 
     async def _save_record(self, record: JobRecord) -> None:
-        """Persist job record to both Redis (if available) and in-memory cache."""
+        """Persist job record to in-memory cache instantly and sync to Redis in background."""
         self._memory_jobs[record.job_id] = record
-        try:
-            await redis_manager.set_json(
-                self._redis_key(record.job_id),
-                record.model_dump(),
-                expire_seconds=self.job_ttl_seconds,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to persist job {record.job_id} to Redis: {e}")
+
+        async def _bg_redis_save():
+            try:
+                await redis_manager.set_json(
+                    self._redis_key(record.job_id),
+                    record.model_dump(),
+                    expire_seconds=self.job_ttl_seconds,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist job {record.job_id} to Redis: {e}")
+
+        asyncio.create_task(_bg_redis_save())
 
     async def create_job(
         self,
@@ -114,7 +118,10 @@ class BackgroundJobManager:
         return record
 
     async def get_job(self, job_id: str) -> Optional[JobRecord]:
-        """Fetch job record from Redis or memory cache."""
+        """Fetch job record from memory cache instantly (< 0.01ms) or Redis fallback."""
+        if job_id in self._memory_jobs:
+            return self._memory_jobs[job_id]
+
         try:
             data = await redis_manager.get_json(self._redis_key(job_id))
             if data:

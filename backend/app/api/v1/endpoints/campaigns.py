@@ -53,6 +53,14 @@ class CreateCampaignRequest(BaseModel):
     campaign_status: str = Field("ACTIVE", description="ACTIVE, INVESTIGATING, MITIGATED, ARCHIVED")
     campaign_confidence: float = Field(80.0, ge=0.0, le=100.0)
     initial_email_ids: Optional[List[uuid.UUID]] = None
+    organization_id: Optional[uuid.UUID] = Field(None, description="Target institution scope for cross-org roles")
+
+
+class UpdateCampaignRequest(BaseModel):
+    campaign_name: Optional[str] = Field(None, min_length=2, max_length=255)
+    threat_summary: Optional[str] = None
+    campaign_status: Optional[str] = Field(None, description="ACTIVE, INVESTIGATING, MITIGATED, ARCHIVED")
+    campaign_confidence: Optional[float] = Field(None, ge=0.0, le=100.0)
 
 
 class AddEmailMembershipRequest(BaseModel):
@@ -160,6 +168,10 @@ async def create_campaign(
     """
     Creates a new campaign entity with optional initial email memberships and audit event.
     """
+    target_org_id = current_user.organization_id
+    if current_user.role_code in CROSS_ORG_ROLES and body.organization_id is not None:
+        target_org_id = body.organization_id
+
     camp = await default_campaign_service.create_campaign(
         session=session,
         campaign_name=body.campaign_name,
@@ -167,7 +179,7 @@ async def create_campaign(
         campaign_status=body.campaign_status,
         campaign_confidence=body.campaign_confidence,
         initial_email_ids=body.initial_email_ids,
-        organization_id=current_user.organization_id,
+        organization_id=target_org_id,
     )
     details = await default_campaign_service.get_campaign_details(session, camp.id)
     if not details:
@@ -222,6 +234,55 @@ async def get_campaign(
     if not details:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Campaign {campaign_id} not found.")
     return CampaignDetailResponse(**details)
+
+
+@router.patch(
+    "/{campaign_id}",
+    response_model=CampaignDetailResponse,
+    summary="Update campaign metadata, status, or threat summary",
+)
+async def update_campaign(
+    campaign_id: uuid.UUID,
+    body: UpdateCampaignRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
+):
+    """
+    Updates campaign status (ACTIVE, INVESTIGATING, MITIGATED, ARCHIVED), confidence, or threat summary.
+    """
+    campaign = await get_authorized_campaign(campaign_id, current_user, session)
+    if body.campaign_name is not None and body.campaign_name.strip():
+        campaign.campaign_name = body.campaign_name.strip()
+    if body.threat_summary is not None:
+        campaign.threat_summary = body.threat_summary.strip()
+    if body.campaign_status is not None and body.campaign_status.strip():
+        campaign.campaign_status = body.campaign_status.strip().upper()
+    if body.campaign_confidence is not None:
+        campaign.campaign_confidence = body.campaign_confidence
+
+    await session.commit()
+    details = await default_campaign_service.get_campaign_details(session, campaign_id)
+    if not details:
+        raise HTTPException(status_code=500, detail="Failed to retrieve updated campaign")
+    return CampaignDetailResponse(**details)
+
+
+@router.delete(
+    "/{campaign_id}",
+    summary="Archive threat campaign",
+)
+async def delete_campaign(
+    campaign_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
+):
+    """
+    Sets campaign status to ARCHIVED.
+    """
+    campaign = await get_authorized_campaign(campaign_id, current_user, session)
+    campaign.campaign_status = "ARCHIVED"
+    await session.commit()
+    return {"message": f"Campaign {campaign_id} archived successfully."}
 
 
 @router.post(
@@ -314,6 +375,7 @@ async def get_email_campaign_memberships(
 )
 async def auto_cluster_campaigns(
     min_score: float = Query(60.0, ge=0.0, le=100.0, description="Minimum correlation threshold for clustering"),
+    organization_id: Optional[uuid.UUID] = Query(None, description="Optional target organization for cross-org roles"),
     session: AsyncSession = Depends(get_db),
     # MVP-04: creates/mutates campaigns, so analyst-and-up.
     current_user: CurrentUser = Depends(require_roles(*ANALYST_ROLES, *CROSS_ORG_ROLES)),
@@ -322,8 +384,9 @@ async def auto_cluster_campaigns(
     Discovers correlated clusters across the caller's organization's emails, creating or linking campaigns
     while preserving overlapping bridge entities without destructive partition mergers.
     """
+    target_org_id = organization_id if (current_user.role_code in CROSS_ORG_ROLES and organization_id) else current_user.organization_id
     clusters = await default_campaign_service.auto_cluster_campaigns(
-        session, min_correlation_score=min_score, organization_id=current_user.organization_id
+        session, min_correlation_score=min_score, organization_id=target_org_id
     )
     return AutoClusterResponse(
         total_clusters_created=len(clusters),

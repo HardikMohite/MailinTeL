@@ -79,6 +79,7 @@ def _generate_temp_password(length: int = 16) -> str:
 class OrgMemberPublic(BaseModel):
     id: str
     email: str
+    username: Optional[str] = None
     full_name: Optional[str] = None
     role: str
     account_status: str
@@ -160,6 +161,7 @@ def _to_public(user: User, role: Role, membership: OrganizationMember) -> OrgMem
     return OrgMemberPublic(
         id=str(user.id),
         email=user.email,
+        username=getattr(user, "username", None),
         full_name=user.full_name,
         role=role.code,
         account_status=user.status,
@@ -184,6 +186,7 @@ async def list_members(
             OrgMemberPublic(
                 id=str(current_user.id),
                 email=current_user.email,
+                username=current_user.username,
                 full_name=current_user.full_name,
                 role=current_user.role_code,
                 account_status="ACTIVE",
@@ -280,9 +283,14 @@ async def invite_user(
     now = datetime.now(timezone.utc)
     temp_password = _generate_temp_password()
 
+    import re
+    raw_prefix = normalized_email.split("@")[0].lower()
+    uname = re.sub(r"[^a-zA-Z0-9_.-]", "", raw_prefix) or "user"
+
     user = User(
         id=uuid.uuid4(),
         email=normalized_email,
+        username=uname,
         full_name=payload.full_name,
         password_hash=hash_password(temp_password),
         auth_provider="LOCAL",

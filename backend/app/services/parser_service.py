@@ -56,30 +56,34 @@ async def parse_and_persist_email(
         await db.execute(delete(EmailHeader).where(EmailHeader.email_id == email_id))
         await db.execute(delete(EmailRecipient).where(EmailRecipient.email_id == email_id))
 
-        # 3. Insert extracted headers
-        for h in structure.headers:
-            header_record = EmailHeader(
-                id=uuid.uuid4(),
-                email_id=email_id,
-                header_name=h.header_name,
-                header_value=h.header_value,
-                normalized_value=h.normalized_value,
-                header_order=h.header_order,
-                created_at=now_utc,
-            )
-            db.add(header_record)
+        # 3. Batch insert extracted headers
+        if structure.headers:
+            db.add_all([
+                EmailHeader(
+                    id=uuid.uuid4(),
+                    email_id=email_id,
+                    header_name=h.header_name,
+                    header_value=h.header_value,
+                    normalized_value=h.normalized_value,
+                    header_order=h.header_order,
+                    created_at=now_utc,
+                )
+                for h in structure.headers
+            ])
 
-        # 4. Insert extracted recipients
-        for r in structure.recipients:
-            recipient_record = EmailRecipient(
-                id=uuid.uuid4(),
-                email_id=email_id,
-                recipient_type=r.recipient_type,
-                address=r.address,
-                display_name=r.display_name,
-                created_at=now_utc,
-            )
-            db.add(recipient_record)
+        # 4. Batch insert extracted recipients
+        if structure.recipients:
+            db.add_all([
+                EmailRecipient(
+                    id=uuid.uuid4(),
+                    email_id=email_id,
+                    recipient_type=r.recipient_type,
+                    address=r.address,
+                    display_name=r.display_name,
+                    created_at=now_utc,
+                )
+                for r in structure.recipients
+            ])
 
         await db.commit()
         await db.refresh(email_record)
